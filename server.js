@@ -14,6 +14,28 @@ const supabase = createClient(
 );
 
 // ========================================
+// 💬 יצירת הודעת קבלה מותאמת אישית
+// ========================================
+function generateWelcomeMessage(business) {
+  // אם יש תבנית מותאמת - השתמש בה
+  if (business.response_template) {
+    return business.response_template
+      .replace('{owner_name}', business.owner_name)
+      .replace('{business_name}', business.business_name)
+      .replace('{service_type}', business.service_type || 'שירותי תחזוקה')
+      .replace('{service_area}', business.service_area || 'המרכז');
+  }
+  
+  // תבנית ברירת מחדל
+  return `שלום! אני ${business.owner_name} מ-${business.business_name} 👋
+
+${business.service_description ? business.service_description : 'אנחנו כאן לעזור לך!'}
+
+קיבלתי את הפנייה שלך! 
+האם תוכל לשלוח תמונה של הבעיה כדי שאוכל להכין הצעת מחיר?`;
+}
+
+// ========================================
 // 🎯 Webhook Endpoint - מקבל הודעות מ-Green API
 // ========================================
 app.post('/webhook/whatsapp', async (req, res) => {
@@ -29,8 +51,35 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     // שלוף מידע
     const phoneNumber = senderData.sender.replace('@c.us', ''); // מספר הלקוח
-    const messageText = messageData.textMessageData?.textMessage || '';
     const instanceId = instanceData.idInstance; // מזהה ה-WhatsApp Business
+
+    // זיהוי סוג ההודעה
+    let messageText = '';
+    let mediaUrl = null;
+    let mediaType = null;
+
+    if (messageData.typeMessage === 'textMessage') {
+      // הודעת טקסט רגילה
+      messageText = messageData.textMessageData?.textMessage || '';
+    } else if (messageData.typeMessage === 'imageMessage') {
+      // תמונה
+      messageText = messageData.fileMessageData?.caption || 'תמונה';
+      mediaUrl = messageData.fileMessageData?.downloadUrl;
+      mediaType = 'image';
+      console.log('📷 התקבלה תמונה:', mediaUrl);
+    } else if (messageData.typeMessage === 'videoMessage') {
+      // וידאו
+      messageText = messageData.fileMessageData?.caption || 'וידאו';
+      mediaUrl = messageData.fileMessageData?.downloadUrl;
+      mediaType = 'video';
+      console.log('🎥 התקבל וידאו:', mediaUrl);
+    } else if (messageData.typeMessage === 'documentMessage') {
+      // מסמך/קובץ
+      messageText = messageData.fileMessageData?.caption || 'קובץ';
+      mediaUrl = messageData.fileMessageData?.downloadUrl;
+      mediaType = 'document';
+      console.log('📎 התקבל קובץ:', mediaUrl);
+    }
 
     console.log(`💬 הודעה מ-${phoneNumber}: ${messageText}`);
 
@@ -43,8 +92,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     console.log(`✅ עסק נמצא: ${business.business_name}`);
 
-    // טפל בהודעה
-    await handleIncomingMessage(business, phoneNumber, messageText);
+    // טפל בהודעה (כולל מדיה)
+    await handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType);
 
     res.status(200).send('OK');
 

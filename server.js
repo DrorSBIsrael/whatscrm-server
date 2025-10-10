@@ -322,13 +322,54 @@ async function createAutoQuote(leadId, products) {
   return quote;
 }
 
-function generateQuoteText(products) {
-  let text = 'הצעת מחיר:\n\n';
-  products.forEach((p, i) => {
-    text += `${i + 1}. ${p.name} - ₪${p.base_price}\n`;
+function generateQuoteText(products, language = 'he') {
+  const templates = {
+    he: {
+      title: '🎯 הצעת מחיר',
+      price: 'מחיר',
+      total: 'סה״כ',
+      includesVAT: 'המחיר כולל מע״מ',
+      validFor: 'תוקף ההצעה: 30 יום',
+      thanks: 'תודה שבחרת בנו! 🙏',
+    },
+    en: {
+      title: '🎯 Quote',
+      price: 'Price',
+      total: 'Total',
+      includesVAT: 'Price includes VAT',
+      validFor: 'Quote valid for: 30 days',
+      thanks: 'Thank you for choosing us! 🙏',
+    },
+    ru: {
+      title: '🎯 Предложение',
+      price: 'Цена',
+      total: 'Итого',
+      includesVAT: 'Цена включает НДС',
+      validFor: 'Срок действия: 30 дней',
+      thanks: 'Спасибо, что выбрали нас! 🙏',
+    },
+  };
+
+  const t = templates[language] || templates.he;
+  
+  let text = `${t.title}\n\n`;
+  
+  products.forEach((product, index) => {
+    text += `${index + 1}. ${product.name}\n`;
+    if (product.description) {
+      text += `   📝 ${product.description}\n`;
+    }
+    text += `   💰 ${t.price}: ₪${parseFloat(product.base_price).toFixed(2)}\n\n`;
   });
+
   const total = products.reduce((sum, p) => sum + parseFloat(p.base_price), 0);
-  text += `\nסה"כ: ₪${total}`;
+  
+  text += `━━━━━━━━━━━━━━━━━\n`;
+  text += `📊 ${t.total}: ₪${total.toFixed(2)}\n\n`;
+  text += `✅ ${t.includesVAT}\n`;
+  text += `📅 ${t.validFor}\n\n`;
+  text += t.thanks;
+
   return text;
 }
 

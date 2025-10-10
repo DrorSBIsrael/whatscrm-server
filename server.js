@@ -93,12 +93,9 @@ async function handleIncomingMessage(business, phoneNumber, messageText) {
     console.log('🆕 פנייה חדשה - יוצר...');
     lead = await createLead(business.id, customer.id, messageText);
 
-    // שלח הודעת קבלה ללקוח
-    await sendWhatsAppMessage(
-      business,
-      phoneNumber,
-      `שלום! קיבלתי את הפנייה שלך 👋\n\nהאם תוכל לשלוח תמונה של הבעיה?`
-    );
+    // שלח הודעת קבלה מותאמת אישית
+    const welcomeMessage = generateWelcomeMessage(business);
+    await sendWhatsAppMessage(business, phoneNumber, welcomeMessage);
 
     // התראה לבעל העסק
     await notifyBusinessOwner(business, customer, lead);

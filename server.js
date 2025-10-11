@@ -103,6 +103,10 @@ app.post('/webhook/whatsapp', async (req, res) => {
   }
 });
 
+app.get('/ping', (req, res) => {
+  res.send('pong');
+});
+
 // ========================================
 // 🔍 מצא עסק לפי Green API Instance
 // ========================================

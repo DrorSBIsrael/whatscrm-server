@@ -600,7 +600,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .from('leads')
       .select('*, customers(*)')
       .eq('business_id', business.id)
-      .eq('status', 'new')
+      .in('status', ['new', 'quoted'])
       .like('notes', '%[WAITING_FOR_OWNER_ACTION]%')
       .order('created_at', { ascending: false });
     
@@ -1374,6 +1374,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .maybeSingle();
     
     if (generalDiscountQuote) {
+      console.log(`💸 מעדכן הנחה כללית: ${messageText}%`);
       const discountPercent = parseFloat(messageText.trim());
       
       if (discountPercent > 0 && discountPercent <= 100) {
@@ -1382,8 +1383,10 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
         const discountAmount = subtotal * (discountPercent / 100);
         const newTotal = subtotal - discountAmount;
         
+        console.log(`📊 חישוב הנחה: סכום ביניים ₪${subtotal}, הנחה ₪${discountAmount}, סה"כ ₪${newTotal}`);
+        
         // עדכן את ההצעה עם ההנחה
-        await supabase
+        const { error: updateError } = await supabase
           .from('quotes')
           .update({
             discount_percentage: discountPercent,
@@ -1392,6 +1395,12 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
             notes: '[WAITING_FOR_EDIT_CHOICE]'
           })
           .eq('id', generalDiscountQuote.id);
+          
+        if (updateError) {
+          console.error('❌ שגיאה בעדכון הנחה:', updateError);
+        } else {
+          console.log('✅ הנחה עודכנה בהצלחה');
+        }
         
         // הצג הצעה מעודכנת
         await showUpdatedQuote(business, generalDiscountQuote.id, normalizedOwner);

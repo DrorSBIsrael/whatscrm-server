@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>אישור הצעת מחיר</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            min-height: 100vh;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .logo {
+            width: 80px;
+            height: 80px;
+            background: white;
+            border-radius: 50%;
+            margin: 0 auto 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+        }
+        
+        .business-name {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .quote-number {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 20px;
+        }
+        
+        .section {
+            margin-bottom: 25px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .section:last-child {
+            border-bottom: none;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #667eea;
+        }
+        
+        .customer-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .info-label {
+            font-weight: 500;
+            color: #666;
+        }
+        
+        .quote-items {
+            margin: 15px 0;
+        }
+        
+        .item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        
+        .item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        
+        .item-name {
+            font-weight: 600;
+            font-size: 16px;
+        }
+        
+        .item-price {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .item-description {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .item-quantity {
+            font-size: 14px;
+            color: #999;
+        }
+        
+        .total-section {
+            background: #667eea;
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .total-label {
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        
+        .total-amount {
+            font-size: 32px;
+            font-weight: bold;
+        }
+        
+        .signature-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        
+        .signature-pad {
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            height: 150px;
+            position: relative;
+            background: white;
+            cursor: crosshair;
+            touch-action: none;
+        }
+        
+        .signature-placeholder {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ccc;
+            font-size: 14px;
+            pointer-events: none;
+        }
+        
+        .signature-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-clear {
+            background: #f8f9fa;
+            color: #666;
+            flex: 1;
+        }
+        
+        .btn-clear:hover {
+            background: #e9ecef;
+        }
+        
+        .approval-section {
+            margin: 20px 0;
+        }
+        
+        .checkbox-wrapper {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .checkbox {
+            width: 20px;
+            height: 20px;
+            margin-top: 2px;
+        }
+        
+        .checkbox-label {
+            flex: 1;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .btn-approve {
+            background: #28a745;
+            color: white;
+            width: 100%;
+            padding: 15px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .btn-approve:hover {
+            background: #218838;
+        }
+        
+        .btn-approve:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .success-message {
+            display: none;
+            background: #d4edda;
+            color: #155724;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .success-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .terms {
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">🔧</div>
+            <div class="business-name">{{businessName}}</div>
+            <div class="quote-number">הצעת מחיר #{{quoteNumber}}</div>
+        </div>
+        
+        <div class="content">
+            <!-- פרטי לקוח -->
+            <div class="section">
+                <h2 class="section-title">פרטי לקוח</h2>
+                <div class="customer-info">
+                    <div class="info-row">
+                        <span class="info-label">שם:</span>
+                        <span>{{customerName}}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">טלפון:</span>
+                        <span>{{customerPhone}}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">כתובת:</span>
+                        <span>{{customerAddress}}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">תאריך:</span>
+                        <span>{{quoteDate}}</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- תיאור העבודה -->
+            <div class="section">
+                <h2 class="section-title">תיאור העבודה</h2>
+                <p>{{serviceDescription}}</p>
+            </div>
+            
+            <!-- פריטי הצעת המחיר -->
+            <div class="section">
+                <h2 class="section-title">פירוט הצעת המחיר</h2>
+                <div class="quote-items">
+                    {{quoteItems}}
+                </div>
+            </div>
+            
+            <!-- סה"כ -->
+            <div class="total-section">
+                <div class="total-label">סה"כ לתשלום</div>
+                <div class="total-amount">₪{{totalAmount}}</div>
+            </div>
+            
+            <!-- חתימה -->
+            <div class="signature-section">
+                <h2 class="section-title">חתימת הלקוח</h2>
+                <canvas id="signaturePad" class="signature-pad">
+                    <div class="signature-placeholder">חתום כאן</div>
+                </canvas>
+                <div class="signature-actions">
+                    <button class="btn btn-clear" onclick="clearSignature()">נקה חתימה</button>
+                </div>
+            </div>
+            
+            <!-- אישור -->
+            <div class="approval-section">
+                <div class="checkbox-wrapper">
+                    <input type="checkbox" id="agreeTerms" class="checkbox">
+                    <label for="agreeTerms" class="checkbox-label">
+                        אני מאשר/ת שקראתי והבנתי את הצעת המחיר ומסכים/ה לתנאים המפורטים בה. 
+                        ידוע לי שהמחירים כוללים מע"מ ותקפים ל-30 יום מתאריך ההצעה.
+                    </label>
+                </div>
+                
+                <button class="btn btn-approve" id="approveBtn" onclick="approveQuote()" disabled>
+                    אשר הצעת מחיר
+                </button>
+            </div>
+            
+            <!-- הודעת הצלחה -->
+            <div class="success-message" id="successMessage">
+                <div class="success-icon">✅</div>
+                <h3>הצעת המחיר אושרה בהצלחה!</h3>
+                <p>נציג יצור איתך קשר בהקדם לתיאום הביצוע.</p>
+            </div>
+            
+            <!-- טעינה -->
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>מעבד את האישור...</p>
+            </div>
+        </div>
+        
+        <div class="terms">
+            <p>© {{businessName}} | כל הזכויות שמורות</p>
+        </div>
+    </div>
+    
+    <script>
+        // Canvas setup
+        const canvas = document.getElementById('signaturePad');
+        const ctx = canvas.getContext('2d');
+        let isDrawing = false;
+        let hasSignature = false;
+        
+        // Set canvas size
+        function resizeCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+        
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        // Mouse events
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+        
+        // Touch events
+        canvas.addEventListener('touchstart', handleTouch);
+        canvas.addEventListener('touchmove', handleTouch);
+        canvas.addEventListener('touchend', stopDrawing);
+        
+        function startDrawing(e) {
+            isDrawing = true;
+            const rect = canvas.getBoundingClientRect();
+            ctx.beginPath();
+            ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+        }
+        
+        function draw(e) {
+            if (!isDrawing) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = '#333';
+            ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+            ctx.stroke();
+            
+            hasSignature = true;
+            checkFormValidity();
+        }
+        
+        function stopDrawing() {
+            isDrawing = false;
+        }
+        
+        function handleTouch(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const mouseEvent = new MouseEvent(e.type === 'touchstart' ? 'mousedown' : 
+                                            e.type === 'touchmove' ? 'mousemove' : 'mouseup', {
+                clientX: touch.clientX,
+                clientY: touch.clientY
+            });
+            canvas.dispatchEvent(mouseEvent);
+        }
+        
+        function clearSignature() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            hasSignature = false;
+            checkFormValidity();
+        }
+        
+        // Form validation
+        document.getElementById('agreeTerms').addEventListener('change', checkFormValidity);
+        
+        function checkFormValidity() {
+            const agreeTerms = document.getElementById('agreeTerms').checked;
+            const approveBtn = document.getElementById('approveBtn');
+            
+            approveBtn.disabled = !agreeTerms || !hasSignature;
+        }
+        
+        // Submit approval
+        async function approveQuote() {
+            const loading = document.getElementById('loading');
+            const content = document.querySelector('.content');
+            const successMessage = document.getElementById('successMessage');
+            
+            // Get signature as base64
+            const signatureData = canvas.toDataURL();
+            
+            // Show loading
+            loading.style.display = 'block';
+            content.style.opacity = '0.5';
+            
+            try {
+                // Send approval to server
+                const response = await fetch('/api/approve-quote', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        quoteId: '{{quoteId}}',
+                        signature: signatureData,
+                        approvedAt: new Date().toISOString()
+                    })
+                });
+                
+                if (response.ok) {
+                    // Show success
+                    loading.style.display = 'none';
+                    content.style.display = 'none';
+                    successMessage.style.display = 'block';
+                } else {
+                    throw new Error('Failed to approve quote');
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                content.style.opacity = '1';
+                alert('אירעה שגיאה באישור ההצעה. אנא נסה שוב.');
+            }
+        }
+    </script>
+</body>
+</html>

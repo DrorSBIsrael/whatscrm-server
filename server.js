@@ -4436,9 +4436,10 @@ async function calculateAvailableSlots(businessId, availability) {
 // ========================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 WhatsCRM Server v2.0 running on port ${PORT}`);
+  console.log(`🚀 WhatsCRM Server v2.1 FIXED running on port ${PORT}`);
   console.log(`📡 Webhook URL: http://localhost:${PORT}/webhook/whatsapp`);
   console.log(`🧠 Claude AI: ${process.env.ANTHROPIC_API_KEY ? 'Enabled ✅' : 'Disabled ❌'}`);
   console.log(`💾 Media Storage: Enabled ✅`);
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
+  console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });

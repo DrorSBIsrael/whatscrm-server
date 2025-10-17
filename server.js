@@ -860,17 +860,23 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
     if (messageText.toLowerCase().includes('פגישה')) {
       console.log('🗓️ בעל העסק רוצה לתאם פגישה');
       
-      // מצא פנייה עם הצעה מאושרת שמוכנה לתיאום
-      const { data: readyLeads } = await supabase
+      // מצא פניות עם הצעות מאושרות (approved או sent)
+      const { data: leadsWithQuotes } = await supabase
         .from('leads')
         .select('*, customers(*), quotes(*)')
         .eq('business_id', business.id)
-        .like('notes', '%[READY_FOR_APPOINTMENT]%')
+        .in('status', ['quoted', 'approved'])
         .order('created_at', { ascending: false });
-        
+      
+      // סנן רק פניות עם הצעות מאושרות
+      const readyLeads = leadsWithQuotes?.filter(lead => 
+        lead.quotes?.some(quote => ['approved', 'sent'].includes(quote.status))
+      ) || [];
+      
       if (readyLeads && readyLeads.length > 0) {
         const lead = readyLeads[0];
-        await startAppointmentScheduling(business, lead, normalizedOwner);
+        const customer = lead.customers;
+        await startAppointmentScheduling(business, lead, customer, normalizedOwner);
         return;
       } else {
         await sendWhatsAppMessage(business, normalizedOwner, 
@@ -1378,15 +1384,20 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
     if (messageText.toLowerCase().includes('פגישה')) {
       console.log('🗓️ בעל העסק רוצה לתאם פגישה');
       
-      // מצא פנייה עם הצעה מאושרת שמוכנה לתיאום
-      const { data: readyLeads } = await supabase
+      // מצא פניות עם הצעות מאושרות (approved או sent)
+      const { data: leadsWithQuotes } = await supabase
         .from('leads')
         .select('*, customers(*), quotes(*)')
         .eq('business_id', business.id)
-        .like('notes', '%[READY_FOR_APPOINTMENT]%')
+        .in('status', ['quoted', 'approved'])
         .order('created_at', { ascending: false });
       
-      if (!readyLeads || readyLeads.length === 0) {
+      // סנן רק פניות עם הצעות מאושרות
+      const readyLeads = leadsWithQuotes?.filter(lead => 
+        lead.quotes?.some(quote => ['approved', 'sent'].includes(quote.status))
+      ) || [];
+      
+      if (readyLeads.length === 0) {
         await sendWhatsAppMessage(business, normalizedOwner, 
           '❌ לא נמצאו פניות עם הצעות מאושרות שממתינות לתיאום פגישה.\n\nתאשר קודם הצעת מחיר ללקוח.');
         return;
@@ -2836,7 +2847,7 @@ async function handleOwnerApproval(business, quoteId = null) {
       // אם יש quoteId, השתמש בו
       const { data } = await supabase
         .from('quotes')
-        .select('*, leads(*, customers(*))')
+        .select('*, leads(*, customers(*)), quote_items(*)')
         .eq('id', quoteId)
         .single();
       quote = data;
@@ -2844,7 +2855,7 @@ async function handleOwnerApproval(business, quoteId = null) {
       // אחרת, מצא את ההצעה האחרונה שממתינה לאישור
       const { data } = await supabase
       .from('quotes')
-      .select('*, leads(*, customers(*))')
+      .select('*, leads(*, customers(*)), quote_items(*)')
       .eq('status', 'pending_owner_approval')
         .eq('business_id', business.id)
       .order('created_at', { ascending: false })
@@ -2859,21 +2870,46 @@ async function handleOwnerApproval(business, quoteId = null) {
       return;
     }
     
-    // עדכן סטטוס להצעה מאושרת
+    // עדכן סטטוס להצעה מאושרת ועדכן את הטקסט
     await supabase
       .from('quotes')
-      .update({ status: 'sent' })
+      .update({ 
+        status: 'sent',
+        quote_text: generateDetailedQuoteText(quote.quote_items.map(item => ({
+          product: {
+            name: item.product_name,
+            description: item.product_description
+          },
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price
+        })))
+      })
       .eq('id', quote.id);
     
     // שלח ללקוח
     const customerPhone = quote.leads.customers.phone;
     const customerName = quote.leads.customers.name;
     
+    // הכן את פריטי ההצעה לטקסט המעודכן
+    const quoteItems = quote.quote_items.map(item => ({
+      product: {
+        name: item.product_name,
+        description: item.product_description
+      },
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      total_price: item.total_price
+    }));
+    
+    // ייצר טקסט מעודכן של ההצעה
+    const updatedQuoteText = generateDetailedQuoteText(quoteItems);
+    
     const customerMessage = `שלום ${customerName}! 😊
 
 הצעת המחיר שלך מוכנה! 🎉
 
-${quote.quote_text}
+${updatedQuoteText}
 
 💳 *לאישור ההצעה:*
 🔗 ${process.env.FRONTEND_URL || process.env.WEBHOOK_URL || 'https://whatscrm-server.onrender.com'}/quote/${quote.id}

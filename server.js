@@ -1234,9 +1234,10 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .like('notes', '%[SELECTING_APPOINTMENT_DAY]%')
       .order('created_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
     
     if (selectingDayLead) {
+      console.log('🗓️ בעל העסק בוחר יום לפגישה');
       const optionsMatch = selectingDayLead.notes.match(/\[SELECTING_APPOINTMENT_DAY\]\|(.+?)(\n|$)/);
       if (optionsMatch) {
         const daysOptions = JSON.parse(optionsMatch[1]);
@@ -1301,7 +1302,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .like('notes', '%[SELECTING_APPOINTMENT_TIMES]%')
       .order('created_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
     
     if (selectingTimesLead) {
       const optionsMatch = selectingTimesLead.notes.match(/\[SELECTING_APPOINTMENT_TIMES\]\|(.+?)(\n|$)/);
@@ -4180,11 +4181,118 @@ async function calculateAvailableSlots(businessId, availability) {
 }
 
 // ========================================
+// 🔔 תזכורות יומיות
+// ========================================
+function scheduleDailyReminders() {
+  // חשב כמה זמן עד 20:00
+  const now = new Date();
+  const tonight = new Date(now);
+  tonight.setHours(20, 0, 0, 0);
+  
+  // אם כבר עברנו את 20:00, קבע למחר
+  if (now > tonight) {
+    tonight.setDate(tonight.getDate() + 1);
+  }
+  
+  const msUntilTonight = tonight - now;
+  
+  // קבע טיימר ראשוני
+  setTimeout(() => {
+    sendDailyReminders();
+    
+    // ואז הפעל כל 24 שעות
+    setInterval(sendDailyReminders, 24 * 60 * 60 * 1000);
+  }, msUntilTonight);
+  
+  console.log(`⏰ תזכורות יומיות יופעלו ב-20:00 (בעוד ${Math.round(msUntilTonight / 1000 / 60)} דקות)`);
+}
+
+async function sendDailyReminders() {
+  console.log('🔔 שולח תזכורות יומיות...');
+  
+  try {
+    // מצא את כל הפגישות של מחר
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    
+    const { data: appointments } = await supabase
+      .from('appointments')
+      .select('*, leads(*, businesses(*)), customers(*)')
+      .eq('appointment_date', tomorrowStr)
+      .in('status', ['confirmed', 'pending']);
+    
+    if (!appointments || appointments.length === 0) {
+      console.log('📅 אין פגישות מחר');
+      return;
+    }
+    
+    console.log(`📅 נמצאו ${appointments.length} פגישות מחר`);
+    
+    // קבץ לפי עסק
+    const appointmentsByBusiness = {};
+    
+    for (const appointment of appointments) {
+      const businessId = appointment.business_id;
+      if (!appointmentsByBusiness[businessId]) {
+        appointmentsByBusiness[businessId] = {
+          business: appointment.leads.businesses,
+          appointments: []
+        };
+      }
+      appointmentsByBusiness[businessId].appointments.push(appointment);
+    }
+    
+    // שלח תזכורות לכל עסק
+    for (const businessData of Object.values(appointmentsByBusiness)) {
+      const { business, appointments } = businessData;
+      
+      // תזכורת לבעל העסק
+      let ownerMessage = `🔔 *תזכורת - פגישות מחר*\n\n`;
+      ownerMessage += `יש לך ${appointments.length} פגישות מחר:\n\n`;
+      
+      for (const apt of appointments) {
+        ownerMessage += `⏰ *${apt.appointment_time.substring(0, 5)}*\n`;
+        ownerMessage += `👤 ${apt.customers.name}\n`;
+        ownerMessage += `📱 ${apt.customers.phone}\n`;
+        ownerMessage += `📍 ${apt.location}\n`;
+        ownerMessage += `━━━━━━━━━━━━━━━━\n`;
+      }
+      
+      ownerMessage += `\n💪 בהצלחה!`;
+      
+      await sendWhatsAppMessage(business, normalizePhone(business.owner_phone), ownerMessage);
+      
+      // תזכורות ללקוחות
+      for (const apt of appointments) {
+        const customerMessage = `שלום ${apt.customers.name}! 👋\n\n` +
+          `זוהי תזכורת על הפגישה שלך מחר:\n\n` +
+          `📅 ${tomorrow.toLocaleDateString('he-IL')}\n` +
+          `⏰ ${apt.appointment_time.substring(0, 5)}\n` +
+          `📍 ${apt.location}\n` +
+          `🔧 ${business.business_name}\n\n` +
+          `נתראה מחר! 😊`;
+        
+        await sendWhatsAppMessage(business, apt.customers.phone, customerMessage);
+      }
+    }
+    
+    console.log('✅ תזכורות נשלחו בהצלחה');
+    
+  } catch (error) {
+    console.error('❌ שגיאה בשליחת תזכורות:', error);
+  }
+}
+
+// ========================================
 // 🚀 Start Server
 // ========================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 WhatsCRM Server v2.1 FIXED running on port ${PORT}`);
+  
+  // הפעל תזכורות יומיות
+  scheduleDailyReminders();
   console.log(`📡 Webhook URL: http://localhost:${PORT}/webhook/whatsapp`);
   console.log(`🧠 Claude AI: ${process.env.ANTHROPIC_API_KEY ? 'Enabled ✅' : 'Disabled ❌'}`);
   console.log(`💾 Media Storage: Enabled ✅`);

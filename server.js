@@ -600,7 +600,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .from('leads')
       .select('*, customers(*)')
       .eq('business_id', business.id)
-      .eq('status', 'new')
+      .in('status', ['new', 'quoted'])
       .like('notes', '%[WAITING_FOR_OWNER_ACTION]%')
       .order('created_at', { ascending: false });
     
@@ -752,7 +752,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .select('*, quote_items(*), leads(*, customers(*))')
       .eq('status', 'pending_owner_approval')
       .eq('business_id', business.id)  // חשוב! לסנן רק הצעות של העסק הנוכחי
-      .or('notes.like.%[WAITING_FOR_EDIT_CHOICE]%,notes.like.%[WAITING_FOR_PRODUCT_ADDITION]%')
+      .like('notes', '%[WAITING_FOR_EDIT_CHOICE]%')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -807,65 +807,12 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       }
       
       if (messageText.trim() === '3') {
-        console.log('🎯 בעל העסק בחר: הנחה');
-        // עבור מייד להצגת רשימת פריטים
-        let itemsList = `🎯 *בחר פריט להנחה:*\n\n`;
-        editQuote.quote_items.forEach((item, index) => {
-          itemsList += `*${index + 1}. ${item.product_name || item.products?.name}*\n`;
-          itemsList += `   מחיר: ₪${item.unit_price.toFixed(2)} × ${item.quantity} = ₪${item.total_price.toFixed(2)}\n\n`;
-        });
-        
-        itemsList += `*99. הנחה כללית על כל ההצעה*\n\n`;
-        itemsList += `━━━━━━━━━━━━━━━━\n`;
-        itemsList += `👆 *שלח את מספר הפריט שתרצה להנחות*\n`;
-        itemsList += `או 99 להנחה כללית`;
-        
-        await sendWhatsAppMessage(business, normalizedOwner, itemsList);
-        await supabase.from('quotes').update({ notes: '[WAITING_FOR_DISCOUNT_ITEM_SELECTION]' }).eq('id', editQuote.id);
-        return;
-      }
-      
-      if (messageText.trim() === '4') {
-        console.log('➕ בעל העסק רוצה להוסיף פריט');
-        // הצג רשימת מוצרים להוספה
-        const { data: products } = await supabase
-          .from('products')
-          .select('*')
-          .eq('business_id', business.id)
-          .eq('is_active', true)
-          .order('name');
-        
-        if (products && products.length > 0) {
-          let productMessage = `➕ *בחר מוצרים להוספה להצעה:*\n\n`;
-          
-          products.forEach((product, index) => {
-            productMessage += `*${index + 1}.* ${product.name}\n`;
-            productMessage += `   💰 ₪${parseFloat(product.base_price).toFixed(2)}\n`;
-            if (product.description) {
-              productMessage += `   📝 ${product.description.substring(0, 50)}${product.description.length > 50 ? '...' : ''}\n`;
-            }
-            productMessage += `\n`;
-          });
-          
-          productMessage += `━━━━━━━━━━━━━━━━\n`;
-          productMessage += `📝 *השב עם מספרי המוצרים מופרדים בפסיקים*\n`;
-          productMessage += `*דוגמה:* 1,3,5`;
-          
-          await sendWhatsAppMessage(business, normalizedOwner, productMessage);
-          await supabase.from('quotes').update({ notes: '[WAITING_FOR_PRODUCT_ADDITION]' }).eq('id', editQuote.id);
-        } else {
-          await sendWhatsAppMessage(business, normalizedOwner, '❌ לא נמצאו מוצרים זמינים להוספה');
-        }
-        return;
-      }
-      
-      if (messageText.trim() === '5') {
         console.log('✅ בעל העסק אישר הצעה');
         await handleOwnerApproval(business, editQuote.id);
         return;
       }
       
-      if (messageText.trim() === '6') {
+      if (messageText.trim() === '4') {
         console.log('❌ בעל העסק ביטל הצעה');
         await supabase.from('quotes').delete().eq('id', editQuote.id);
         await sendWhatsAppMessage(business, normalizedOwner, '✅ ההצעה בוטלה.');
@@ -874,7 +821,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
         return;
       }
       
-      if (messageText.trim() === '7') {
+      if (messageText.trim() === '5') {
         console.log('📋 בעל העסק מבקש לחזור לרשימת פניות');
         // נקה את הסימון מההצעה
         await supabase.from('quotes').update({ notes: '' }).eq('id', editQuote.id);
@@ -894,7 +841,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .select('notes')
       .eq('status', 'pending_owner_approval')
       .eq('business_id', business.id)
-      .or('notes.like.%[WAITING_FOR_QUANTITY_CHANGE]%,notes.like.%[WAITING_FOR_PRICE_CHANGE]%,notes.like.%[WAITING_FOR_QUANTITY_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_PRICE_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_NEW_QUANTITY]%,notes.like.%[WAITING_FOR_NEW_PRICE]%,notes.like.%[WAITING_FOR_DISCOUNT_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_GENERAL_DISCOUNT]%,notes.like.%[WAITING_FOR_ITEM_DISCOUNT]%')
+      .or('notes.like.%[WAITING_FOR_QUANTITY_CHANGE]%,notes.like.%[WAITING_FOR_PRICE_CHANGE]%,notes.like.%[WAITING_FOR_QUANTITY_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_PRICE_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_NEW_QUANTITY]%,notes.like.%[WAITING_FOR_NEW_PRICE]%')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -906,35 +853,49 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       anyEditQuote.notes.includes('[WAITING_FOR_QUANTITY_ITEM_SELECTION]') ||
       anyEditQuote.notes.includes('[WAITING_FOR_PRICE_ITEM_SELECTION]') ||
       anyEditQuote.notes.includes('[WAITING_FOR_NEW_QUANTITY]') ||
-      anyEditQuote.notes.includes('[WAITING_FOR_NEW_PRICE]') ||
-      anyEditQuote.notes.includes('[WAITING_FOR_DISCOUNT_ITEM_SELECTION]') ||
-      anyEditQuote.notes.includes('[WAITING_FOR_GENERAL_DISCOUNT]') ||
-      anyEditQuote.notes.includes('[WAITING_FOR_ITEM_DISCOUNT]')
+      anyEditQuote.notes.includes('[WAITING_FOR_NEW_PRICE]')
     );
     
     // בדוק קודם אם בעל העסק כתב "פגישה"
     if (messageText.toLowerCase().includes('פגישה')) {
-      console.log('🗓️ בעל העסק רוצה לתאם פגישה - עובר לטיפול בפגישות');
-      // הקוד ימשיך למטה לטיפול בפגישות
-    } else {
-      // בדוק אם יש פנייה שמחכה לבחירת מוצרים
-      const { data: productSelectionLead } = await supabase
-        .from('leads')
-        .select('*')
-        .eq('business_id', business.id)
-        .eq('status', 'new')
-        .like('notes', '%[Waiting for quote selection]%')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      console.log('🗓️ בעל העסק רוצה לתאם פגישה');
       
-      // אם יש פנייה שמחכה לבחירת מוצרים ונשלחו מספרים
-      // אבל לא 99 (שזה הנחה כללית)
-      if (productSelectionLead && messageText.match(/^[\d,\s]+$/) && messageText.trim() !== '99') {
-        console.log('📝 בעל העסק בחר מוצרים:', messageText);
-        await handleOwnerProductSelection(business, messageText);
+      // מצא פנייה עם הצעה מאושרת שמוכנה לתיאום
+      const { data: readyLeads } = await supabase
+        .from('leads')
+        .select('*, customers(*), quotes(*)')
+        .eq('business_id', business.id)
+        .like('notes', '%[READY_FOR_APPOINTMENT]%')
+        .order('created_at', { ascending: false });
+        
+      if (readyLeads && readyLeads.length > 0) {
+        const lead = readyLeads[0];
+        await startAppointmentScheduling(business, lead, normalizedOwner);
+        return;
+      } else {
+        await sendWhatsAppMessage(business, normalizedOwner, 
+          '❌ לא נמצאה פנייה עם הצעת מחיר מאושרת לתיאום פגישה.\n\nיש לוודא שהלקוח אישר את ההצעה לפני תיאום פגישה.');
         return;
       }
+    }
+    
+    // בדוק אם יש פנייה שמחכה לבחירת מוצרים
+    const { data: productSelectionLead } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('business_id', business.id)
+      .eq('status', 'new')
+      .like('notes', '%[Waiting for quote selection]%')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    // אם יש פנייה שמחכה לבחירת מוצרים ונשלחו מספרים
+    // אבל לא 99 (שזה הנחה כללית) ולא במצב עריכה
+    if (productSelectionLead && messageText.match(/^[\d,\s]+$/) && messageText.trim() !== '99' && !isInEditMode) {
+      console.log('📝 בעל העסק בחר מוצרים:', messageText);
+      await handleOwnerProductSelection(business, messageText);
+      return;
     }
     
     // אם זו בחירת מוצרים ואין מצב עריכה פעיל
@@ -954,15 +915,6 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
         if (anyQuote) {
           console.log(`🔍 נמצאה הצעה במצב: ${anyQuote.notes}`);
           // אם יש הצעה אבל היא לא במצב עריכה רגיל, תן הודעה ברורה
-          if (anyQuote.notes.includes('[WAITING_FOR_PRODUCT_ADDITION]')) {
-            await sendWhatsAppMessage(business, normalizedOwner, 
-              `🔄 אתה באמצע הוספת מוצרים להצעה.\n\nבחר מוצרים להוספה (דוגמה: 1,3,5)\nאו רשום "ביטול" לחזרה לתפריט`);
-            return;
-          } else if (anyQuote.notes.includes('[WAITING_FOR_DISCOUNT_ITEM_SELECTION]')) {
-            await sendWhatsAppMessage(business, normalizedOwner, 
-              `🔄 אתה באמצע בחירת פריט להנחה.\n\nבחר מספר פריט או 99 להנחה כללית\nאו רשום "ביטול" לחזרה לתפריט`);
-            return;
-          }
         }
         
         console.log('⚠️ בעל העסק ניסה לערוך אבל אין הצעה פעילה');
@@ -1153,6 +1105,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       return;
     }
     
+    
     // בדוק אם בעל העסק בוחר פריט לשינוי מחיר
     const { data: priceItemSelect } = await supabase
       .from('quotes')
@@ -1162,16 +1115,36 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .like('notes', '%[WAITING_FOR_PRICE_ITEM_SELECTION]%')
       .order('created_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
     
     if (priceItemSelect) {
-      const itemIndex = parseInt(messageText.trim()) - 1;
+      console.log(`💰 בעל העסק בוחר פריט לשינוי מחיר: ${messageText}`);
+      
+      // בדוק אם כתב "ביטול" או "חזור"
+      if (messageText.includes('ביטול') || messageText.includes('חזור')) {
+        await supabase.from('quotes').update({ 
+          notes: '[WAITING_FOR_EDIT_CHOICE]' 
+        }).eq('id', priceItemSelect.id);
+        await showUpdatedQuote(business, priceItemSelect.id, normalizedOwner);
+        return;
+      }
+      
+      const itemNumber = parseInt(messageText.trim());
+      
+      // בדוק אם זה לא מספר בכלל
+      if (isNaN(itemNumber)) {
+        await sendWhatsAppMessage(business, normalizedOwner, 
+          `❌ אנא הזן מספר פריט (1-${priceItemSelect.quote_items.length})\n\nאו כתוב "ביטול" לחזרה לתפריט`);
+        return;
+      }
+      
+      const itemIndex = itemNumber - 1;
       
       if (itemIndex >= 0 && itemIndex < priceItemSelect.quote_items.length) {
         const selectedItem = priceItemSelect.quote_items[itemIndex];
         
         await sendWhatsAppMessage(business, normalizedOwner,
-          `💰 *${selectedItem.products.name}*\n\n` +
+          `💰 *${selectedItem.product_name || selectedItem.products?.name || 'מוצר'}*\n\n` +
           `מחיר נוכחי: ₪${selectedItem.unit_price.toFixed(2)}\n` +
           `כמות: ${selectedItem.quantity} יח'\n\n` +
           `💵 *מה המחיר החדש ליחידה?*\n` +
@@ -1186,7 +1159,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
         return;
       } else {
         await sendWhatsAppMessage(business, normalizedOwner, 
-          '❌ מספר פריט לא תקין. בחר מספר מהרשימה.');
+          `❌ מספר פריט לא תקין (${itemNumber}).\n\nבחר מספר מ-1 עד ${priceItemSelect.quote_items.length}`);
         return;
       }
     }
@@ -1247,99 +1220,6 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       }
     }
     
-    // בדוק אם בעל העסק בוחר פריט להנחה
-    const { data: discountItemSelect, error: discountError } = await supabase
-      .from('quotes')
-      .select('*, quote_items(*, products(*))')
-      .eq('status', 'pending_owner_approval')
-      .eq('business_id', business.id)
-      .like('notes', '%[WAITING_FOR_DISCOUNT_ITEM_SELECTION]%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    
-    if (discountError) {
-      console.log(`⚠️ שגיאה בחיפוש הצעה להנחה: ${discountError.message}`);
-    }
-    
-    if (discountItemSelect) {
-      console.log(`🎯 בעל העסק בוחר פריט להנחה: ${messageText}`);
-      const itemIndex = parseInt(messageText.trim());
-      
-      if (itemIndex === 99) {
-        // הנחה כללית
-        await sendWhatsAppMessage(business, normalizedOwner,
-          `🎯 *הנחה כללית על כל ההצעה*\n\n` +
-          `סכום נוכחי: ₪${discountItemSelect.amount.toFixed(2)}\n\n` +
-          `💸 *מה אחוז ההנחה?*\n` +
-          `רשום רק מספר, לדוגמה: 10`);
-        
-        await supabase.from('quotes').update({ 
-          notes: `[WAITING_FOR_GENERAL_DISCOUNT]` 
-        }).eq('id', discountItemSelect.id);
-        
-        return;
-      } else if (itemIndex > 0 && itemIndex <= discountItemSelect.quote_items.length) {
-        const selectedItem = discountItemSelect.quote_items[itemIndex - 1];
-        
-        await sendWhatsAppMessage(business, normalizedOwner,
-          `🎯 *${selectedItem.product_name || selectedItem.products?.name || 'מוצר'}*\n\n` +
-          `מחיר נוכחי: ₪${selectedItem.unit_price.toFixed(2)} × ${selectedItem.quantity} = ₪${selectedItem.total_price.toFixed(2)}\n\n` +
-          `💸 *מה אחוז ההנחה?*\n` +
-          `רשום רק מספר, לדוגמה: 10`);
-        
-        await supabase.from('quotes').update({ 
-          notes: `[WAITING_FOR_ITEM_DISCOUNT]:${itemIndex - 1}` 
-        }).eq('id', discountItemSelect.id);
-        
-        return;
-      } else {
-        await sendWhatsAppMessage(business, normalizedOwner, 
-          `❌ מספר פריט לא תקין (${itemIndex}).\n\nבחר מספר מהרשימה:\n1-${discountItemSelect.quote_items.length} לפריט ספציפי\n99 להנחה כללית`);
-        return;
-      }
-    }
-    
-    // בדוק אם בעל העסק מזין אחוז הנחה כללית
-    const { data: generalDiscountQuote } = await supabase
-      .from('quotes')
-      .select('*, quote_items(*)')
-      .eq('status', 'pending_owner_approval')
-      .eq('business_id', business.id)
-      .like('notes', '%[WAITING_FOR_GENERAL_DISCOUNT]%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    
-    if (generalDiscountQuote) {
-      const discountPercent = parseFloat(messageText.trim());
-      
-      if (discountPercent > 0 && discountPercent <= 100) {
-        // חשב את הסכום המקורי לפני הנחה
-        const subtotal = generalDiscountQuote.quote_items.reduce((sum, item) => sum + item.total_price, 0);
-        const discountAmount = subtotal * (discountPercent / 100);
-        const newTotal = subtotal - discountAmount;
-        
-        // עדכן את ההצעה עם ההנחה
-        await supabase
-          .from('quotes')
-          .update({
-            discount_percentage: discountPercent,
-            discount_amount: discountAmount,
-            amount: newTotal,
-            notes: '[WAITING_FOR_EDIT_CHOICE]'
-          })
-          .eq('id', generalDiscountQuote.id);
-        
-        // הצג הצעה מעודכנת
-        await showUpdatedQuote(business, generalDiscountQuote.id, normalizedOwner);
-        return;
-      } else {
-        await sendWhatsAppMessage(business, normalizedOwner, 
-          '❌ אנא הזן אחוז הנחה תקין (1-100)');
-        return;
-      }
-    }
     
     // בדוק אם בעל העסק בוחר יום לפגישה
     const { data: selectingDayLead } = await supabase
@@ -1480,140 +1360,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       return;
     }
     
-    // בדוק אם בעל העסק מזין אחוז הנחה לפריט
-    const { data: itemDiscountQuote } = await supabase
-      .from('quotes')
-      .select('*, quote_items(*, products(*))')
-      .eq('status', 'pending_owner_approval')
-      .eq('business_id', business.id)
-      .like('notes', '%[WAITING_FOR_ITEM_DISCOUNT]%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
     
-    if (itemDiscountQuote) {
-      const discountPercent = parseFloat(messageText.trim());
-      
-      if (discountPercent > 0 && discountPercent <= 100) {
-        // חלץ את האינדקס מה-notes
-        const itemIndex = parseInt(itemDiscountQuote.notes.match(/\[WAITING_FOR_ITEM_DISCOUNT\]:(\d+)/)[1]);
-        const item = itemDiscountQuote.quote_items[itemIndex];
-        
-        // חשב מחיר חדש אחרי הנחה
-        const discountAmount = item.unit_price * (discountPercent / 100);
-        const newUnitPrice = item.unit_price - discountAmount;
-        const newItemTotal = newUnitPrice * item.quantity;
-        
-        // עדכן את הפריט
-        await supabase
-          .from('quote_items')
-          .update({
-            unit_price: newUnitPrice,
-            total_price: newItemTotal,
-            discount_percentage: discountPercent
-          })
-          .eq('id', item.id);
-        
-        // חשב מחדש את הסכום הכולל
-        const { data: updatedItems } = await supabase
-          .from('quote_items')
-          .select('*')
-          .eq('quote_id', itemDiscountQuote.id);
-        
-        const newQuoteTotal = updatedItems.reduce((sum, item) => sum + item.total_price, 0);
-        
-        // עדכן את ההצעה
-        await supabase
-          .from('quotes')
-          .update({
-            amount: newQuoteTotal,
-            notes: '[WAITING_FOR_EDIT_CHOICE]'
-          })
-          .eq('id', itemDiscountQuote.id);
-        
-        // הצג הצעה מעודכנת
-        await showUpdatedQuote(business, itemDiscountQuote.id, normalizedOwner);
-        return;
-      } else {
-        await sendWhatsAppMessage(business, normalizedOwner, 
-          '❌ אנא הזן אחוז הנחה תקין (1-100)');
-        return;
-      }
-    }
-    
-    // בדוק אם יש הצעה עם [WAITING_FOR_PRODUCT_ADDITION] ונשלחו מספרים
-    if (editQuote && editQuote.notes && editQuote.notes.includes('[WAITING_FOR_PRODUCT_ADDITION]') && 
-        messageText.match(/^[\d,\s]+$/)) {
-      console.log('➕ מוסיף מוצרים להצעה');
-      
-      // חלץ את המספרים
-      const selectedNumbers = messageText.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n));
-      
-      if (selectedNumbers.length > 0) {
-        // שלוף את המוצרים
-        const { data: allProducts } = await supabase
-          .from('products')
-          .select('*')
-          .eq('business_id', business.id)
-          .eq('is_active', true)
-          .order('name');
-        
-        const selectedProducts = selectedNumbers
-          .map(num => allProducts[num - 1])
-          .filter(p => p != null);
-        
-        if (selectedProducts.length > 0) {
-          // הוסף את המוצרים החדשים להצעה
-          const newItems = selectedProducts.map(product => ({
-            quote_id: editQuote.id,
-            product_id: product.id,
-            product_name: product.name,
-            product_description: product.description,
-            quantity: 1,
-            unit_price: parseFloat(product.base_price),
-            total_price: parseFloat(product.base_price)
-          }));
-          
-          const { error: insertError } = await supabase
-            .from('quote_items')
-            .insert(newItems);
-          
-          if (!insertError) {
-            // חשב מחדש את הסכום הכולל
-            const { data: allItems } = await supabase
-              .from('quote_items')
-              .select('*')
-              .eq('quote_id', editQuote.id);
-            
-            const newTotal = allItems.reduce((sum, item) => sum + item.total_price, 0);
-            
-            // עדכן את ההצעה
-            await supabase
-              .from('quotes')
-              .update({
-                amount: newTotal,
-                notes: '[WAITING_FOR_EDIT_CHOICE]'
-              })
-              .eq('id', editQuote.id);
-            
-            await sendWhatsAppMessage(business, normalizedOwner, 
-              `✅ הוספתי ${selectedProducts.length} מוצרים להצעה!`);
-            
-            // הצג הצעה מעודכנת
-            await showUpdatedQuote(business, editQuote.id, normalizedOwner);
-          } else {
-            console.error('❌ שגיאה בהוספת מוצרים:', insertError);
-            await sendWhatsAppMessage(business, normalizedOwner, '❌ שגיאה בהוספת המוצרים');
-          }
-        } else {
-          await sendWhatsAppMessage(business, normalizedOwner, '❌ לא זיהיתי מוצרים תקינים');
-        }
-      } else {
-        await sendWhatsAppMessage(business, normalizedOwner, 
-          '❌ לא זיהיתי מספרים. נסה שוב בפורמט: 1,3,5');
-      }
-      return;
-    }
     
     // בדוק אם זו תשובה מיוחדת
     if (messageText.toLowerCase().includes('אישור')) {
@@ -1741,7 +1488,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
         .like('notes', '%Waiting for quote selection%')
         .order('created_at', { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
       
       if (quoteLead) {
         await sendWhatsAppMessage(business, normalizedOwner, 
@@ -2739,11 +2486,9 @@ async function showUpdatedQuote(business, quoteId, ownerPhone) {
     message += `*מה תרצה לעשות?*\n\n`;
     message += `1️⃣ שינוי כמות\n`;
     message += `2️⃣ שינוי מחיר\n`;
-    message += `3️⃣ הוספת הנחה\n`;
-    message += `4️⃣ הוספת פריט\n`;
-    message += `5️⃣ אישור ושליחה ללקוח ✅\n`;
-    message += `6️⃣ ביטול ההצעה ❌\n`;
-    message += `7️⃣ חזרה לרשימת פניות 📋\n\n`;
+    message += `3️⃣ אישור ושליחה ללקוח ✅\n`;
+    message += `4️⃣ ביטול ההצעה ❌\n`;
+    message += `5️⃣ חזרה לרשימת פניות 📋\n\n`;
     message += `השב עם המספר של הפעולה הרצויה`;
     
     await sendWhatsAppMessage(business, ownerPhone, message);
@@ -2893,10 +2638,8 @@ async function handleOwnerProductSelection(business, selectionText) {
     previewMessage += `*מה תרצה לעשות?*\n\n`;
     previewMessage += `1️⃣ שינוי כמות\n`;
     previewMessage += `2️⃣ שינוי מחיר\n`;
-    previewMessage += `3️⃣ הוספת הנחה\n`;
-    previewMessage += `4️⃣ הוספת פריט\n`;
-    previewMessage += `5️⃣ אישור ושליחה ללקוח ✅\n`;
-    previewMessage += `6️⃣ ביטול ההצעה ❌\n\n`;
+    previewMessage += `3️⃣ אישור ושליחה ללקוח ✅\n`;
+    previewMessage += `4️⃣ ביטול ההצעה ❌\n\n`;
     previewMessage += `השב עם המספר של הפעולה הרצויה`;
     
     // ה-notes כבר נשמר ביצירת ההצעה, אין צורך לעדכן שוב
@@ -3016,10 +2759,9 @@ async function handleQuantityInput(business, lead, quantityText) {
     previewMessage += `📋 *מה תרצה לעשות?*\n`;
     previewMessage += `1️⃣ *שינוי כמות* - עדכן כמות למוצרים\n`;
     previewMessage += `2️⃣ *שינוי מחיר* - עדכן מחיר למוצר\n`;
-    previewMessage += `3️⃣ *הנחה* - הוסף הנחה למוצר או כללית\n`;
-    previewMessage += `4️⃣ *אישור* - שלח ללקוח\n`;
-    previewMessage += `5️⃣ *ביטול* - בטל הצעה\n\n`;
-    previewMessage += `השב עם המספר (1-5)`;
+    previewMessage += `3️⃣ *אישור* - שלח ללקוח\n`;
+    previewMessage += `4️⃣ *ביטול* - בטל הצעה\n\n`;
+    previewMessage += `השב עם המספר (1-4)`;
     
     // שמור ב-notes שממתינים לבחירת עריכה
     await supabase
@@ -3101,13 +2843,13 @@ async function handleOwnerApproval(business, quoteId = null) {
     } else {
       // אחרת, מצא את ההצעה האחרונה שממתינה לאישור
       const { data } = await supabase
-        .from('quotes')
-        .select('*, leads(*, customers(*))')
-        .eq('status', 'pending_owner_approval')
+      .from('quotes')
+      .select('*, leads(*, customers(*))')
+      .eq('status', 'pending_owner_approval')
         .eq('business_id', business.id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
       quote = data;
     }
     
@@ -4394,9 +4136,10 @@ async function calculateAvailableSlots(businessId, availability) {
 // ========================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 WhatsCRM Server v2.0 running on port ${PORT}`);
+  console.log(`🚀 WhatsCRM Server v2.1 FIXED running on port ${PORT}`);
   console.log(`📡 Webhook URL: http://localhost:${PORT}/webhook/whatsapp`);
   console.log(`🧠 Claude AI: ${process.env.ANTHROPIC_API_KEY ? 'Enabled ✅' : 'Disabled ❌'}`);
   console.log(`💾 Media Storage: Enabled ✅`);
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
+  console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });

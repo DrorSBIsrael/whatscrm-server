@@ -860,15 +860,14 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
     if (messageText.toLowerCase().includes('פגישה')) {
       console.log('🗓️ בעל העסק רוצה לתאם פגישה');
       
-      // מצא פניות עם הצעות מאושרות (approved או sent)
+      // מצא פניות עם הצעות שנשלחו או אושרו
       const { data: leadsWithQuotes } = await supabase
         .from('leads')
         .select('*, customers(*), quotes(*)')
         .eq('business_id', business.id)
-        .in('status', ['quoted', 'approved'])
         .order('created_at', { ascending: false });
       
-      // סנן רק פניות עם הצעות מאושרות
+      // סנן רק פניות עם הצעות שנשלחו או אושרו
       const readyLeads = leadsWithQuotes?.filter(lead => 
         lead.quotes?.some(quote => ['approved', 'sent'].includes(quote.status))
       ) || [];
@@ -1384,15 +1383,14 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
     if (messageText.toLowerCase().includes('פגישה')) {
       console.log('🗓️ בעל העסק רוצה לתאם פגישה');
       
-      // מצא פניות עם הצעות מאושרות (approved או sent)
+      // מצא פניות עם הצעות שנשלחו או אושרו
       const { data: leadsWithQuotes } = await supabase
         .from('leads')
         .select('*, customers(*), quotes(*)')
         .eq('business_id', business.id)
-        .in('status', ['quoted', 'approved'])
         .order('created_at', { ascending: false });
       
-      // סנן רק פניות עם הצעות מאושרות
+      // סנן רק פניות עם הצעות שנשלחו או אושרו
       const readyLeads = leadsWithQuotes?.filter(lead => 
         lead.quotes?.some(quote => ['approved', 'sent'].includes(quote.status))
       ) || [];
@@ -1856,11 +1854,20 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_FULL_ADDRESS]')) {
         `תודה על הסבלנות! 😊`
       );
       
-      // עדכן את ה-lead עם סימון שצריך לתאם פגישה
+      // עדכן את ה-lead עם סימון שצריך לתאם פגישה וסטטוס approved
       await supabase
         .from('leads')
-        .update({ notes: (quote.leads.notes || '') + '\n[READY_FOR_APPOINTMENT]' })
+        .update({ 
+          notes: (quote.leads.notes || '') + '\n[READY_FOR_APPOINTMENT]',
+          status: 'approved'
+        })
         .eq('id', quote.leads.id);
+        
+      // עדכן גם את סטטוס ההצעה ל-approved
+      await supabase
+        .from('quotes')
+        .update({ status: 'approved' })
+        .eq('id', quoteId);
     }
   }
   return;
@@ -2886,6 +2893,12 @@ async function handleOwnerApproval(business, quoteId = null) {
         })))
       })
       .eq('id', quote.id);
+    
+    // עדכן גם את סטטוס ה-lead
+    await supabase
+      .from('leads')
+      .update({ status: 'quoted' })
+      .eq('id', quote.lead_id);
     
     // שלח ללקוח
     const customerPhone = quote.leads.customers.phone;

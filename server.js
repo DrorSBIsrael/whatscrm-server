@@ -3772,14 +3772,13 @@ app.get('/approve-quote/:quoteId', async (req, res) => {
         </html>
       `;
       
-      // המרה ל-PDF (נצטרך להוסיף ספריית PDF בהמשך)
       // כרגע נשמור את ה-HTML כקובץ טקסט
       const fileName = `quote_${quoteId}_${Date.now()}.html`;
-      const filePath = `quotes-pdfs/${fileName}`;
+      const filePath = `quote-pdfs/${fileName}`;
       
       // שמור ב-Storage
       const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('quotes-pdfs')
+        .from('quote-pdfs')
         .upload(filePath, htmlContent, {
           contentType: 'text/html',
           upsert: false
@@ -4179,3 +4178,4 @@ app.listen(PORT, () => {
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
   console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });
+

@@ -3774,7 +3774,7 @@ app.get('/approve-quote/:quoteId', async (req, res) => {
       
       // כרגע נשמור את ה-HTML כקובץ טקסט
       const fileName = `quote_${quoteId}_${Date.now()}.html`;
-      const filePath = `quote-pdfs/${fileName}`;
+      const filePath = fileName;
       
       // שמור ב-Storage
       const { data: uploadData, error: uploadError } = await supabase.storage

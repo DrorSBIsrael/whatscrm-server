@@ -2349,7 +2349,7 @@ if (nameMatch) {
       .update({ notes: '[WAITING_FOR_NAME]' })
       .eq('id', customer.id);
     
-    const response = 'שלום! אני העוזר האישי של 😊\n ${business.owner_name ||} \n איך קוראים לך?';
+    const response = 'שלום! אני העוזר האישי של  😊\n ${business.owner_name ||'בעל העסק'} \n איך קוראים לך?';
     await sendWhatsAppMessage(business, phoneNumber, response);
     return;
   }
@@ -4600,4 +4600,5 @@ app.listen(PORT, () => {
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
   console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });
+
 

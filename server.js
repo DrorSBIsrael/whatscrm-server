@@ -388,7 +388,13 @@ app.post('/webhook/whatsapp', async (req, res) => {
     if (typeWebhook === 'outgoingMessageReceived') {
       // הודעה יוצאת - מבעל העסק
       phoneNumber = instanceData.wid.replace('@c.us', '');
-      targetPhoneNumber = senderData.chatId.replace('@c.us', ''); // המספר של הלקוח שאליו נשלחה ההודעה
+      // ב-outgoing, senderData.chatId הוא למי נשלחה ההודעה
+      // אם זה לא מספר בעל העסק עצמו, אז זה הלקוח
+      const chatId = senderData.chatId.replace('@c.us', '');
+      if (normalizePhone(chatId) !== normalizePhone(phoneNumber)) {
+        targetPhoneNumber = chatId; // זה המספר של הלקוח
+      }
+      console.log(`📤 הודעה יוצאת: מ-${phoneNumber} אל-${targetPhoneNumber || 'עצמו'}`);
     } else {
       // הודעה נכנסת - מלקוח
       phoneNumber = senderData.sender.replace('@c.us', '');
@@ -606,6 +612,7 @@ const privateMatch = messageText.match(privateRegex);
 
 if (privateMatch || messageText.trim().toLowerCase() === 'פרטי') {
   console.log('📵 זוהתה בקשה להוספה לרשימה הלבנה');
+  console.log(`📞 targetPhoneNumber: ${targetPhoneNumber}`);
   
   // חלץ את השם (אם קיים)
   const contactName = privateMatch ? privateMatch[1].trim() : 'איש קשר פרטי';
@@ -4046,6 +4053,16 @@ app.get('/approve-quote/:quoteId', async (req, res) => {
       `בעל העסק יצור איתך קשר בקרוב לתיאום מועד הגעה.\n\n` +
       `תודה שבחרת ב-${business.business_name}! 🙏`
     );
+    
+    // הקפא מענה אוטומטי ל-24 שעות
+    console.log('🔕 מקפיא מענה אוטומטי ל-24 שעות אחרי אישור הצעה');
+    await supabase
+      .from('customers')
+      .update({ 
+        notes: `[GENERAL_CORRESPONDENCE_24H]|UNTIL:${new Date(Date.now() + 24*60*60*1000).toISOString()}`,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', customer.id);
     
     res.send(`
       <!DOCTYPE html>

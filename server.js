@@ -594,143 +594,6 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
   if (normalizedIncoming === normalizedOwner) {
     console.log('👨‍💼 הודעה מבעל העסק!');
     
-    // בדוק קודם אם בעל העסק בתהליך תיאום פגישה
-    const { data: appointmentLead } = await supabase
-      .from('leads')
-      .select('*, customers(*)')
-      .eq('business_id', business.id)
-      .or('notes.like.%[SELECTING_APPOINTMENT_DAY]%,notes.like.%[SELECTING_APPOINTMENT_TIMES]%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    
-    if (appointmentLead) {
-      // בדוק אם בוחר יום
-      if (appointmentLead.notes.includes('[SELECTING_APPOINTMENT_DAY]')) {
-        console.log('🗓️ בעל העסק בוחר יום לפגישה');
-        const optionsMatch = appointmentLead.notes.match(/\[SELECTING_APPOINTMENT_DAY\]\|(.+?)(\n|$)/);
-        if (optionsMatch) {
-          const daysOptions = JSON.parse(optionsMatch[1]);
-          const dayChoice = parseInt(messageText.trim());
-          
-          if (dayChoice > 0 && dayChoice <= daysOptions.length) {
-            const selectedDay = daysOptions[dayChoice - 1];
-            
-            // חשב שעות פנויות ביום שנבחר
-            const slots = await calculateDaySlots(
-              business.id, 
-              selectedDay.date, 
-              selectedDay.availability
-            );
-            
-            if (slots.length === 0) {
-              await sendWhatsAppMessage(business, normalizedOwner,
-                '❌ אין שעות פנויות ביום זה. בחר יום אחר.');
-              return;
-            }
-            
-            // הצג שעות לבחירה
-            let message = `📅 *${selectedDay.dayName} ${selectedDay.displayDate}*\n\n`;
-            message += '⏰ *בחר שעות לפגישה:*\n';
-            message += '(תוכל לבחור עד 3 אופציות)\n\n';
-            
-            slots.forEach((slot, index) => {
-              message += `${index + 1}. ${slot.time}\n`;
-            });
-            
-            message += '\n*דוגמה:* 1,3,5 (לבחירת שעות 1, 3 ו-5)\n';
-            message += 'או רק מספר אחד לאופציה בודדת';
-            
-            // עדכן את ה-notes
-            await supabase
-              .from('leads')
-              .update({ 
-                notes: appointmentLead.notes.replace(
-                  /\[SELECTING_APPOINTMENT_DAY\]\|.+?(\n|$)/, 
-                  `[SELECTING_APPOINTMENT_TIMES]|${JSON.stringify({
-                    day: selectedDay,
-                    slots: slots
-                  })}`
-                )
-              })
-              .eq('id', appointmentLead.id);
-            
-            await sendWhatsAppMessage(business, normalizedOwner, message);
-            return;
-          } else {
-            await sendWhatsAppMessage(business, normalizedOwner,
-              '❌ אנא בחר מספר תקין מהרשימה');
-            return;
-          }
-        }
-      }
-      
-      // בדוק אם בוחר שעות
-      if (appointmentLead.notes.includes('[SELECTING_APPOINTMENT_TIMES]')) {
-        console.log('⏰ בעל העסק בוחר שעות לפגישה');
-        const optionsMatch = appointmentLead.notes.match(/\[SELECTING_APPOINTMENT_TIMES\]\|(.+?)(\n|$)/);
-        if (optionsMatch) {
-          const options = JSON.parse(optionsMatch[1]);
-          const selectedIndices = messageText.split(',').map(s => parseInt(s.trim()) - 1);
-          
-          // בדוק שכל האינדקסים תקינים
-          const validIndices = selectedIndices.filter(i => i >= 0 && i < options.slots.length);
-          
-          if (validIndices.length > 0 && validIndices.length <= 3) {
-            const selectedSlots = validIndices.map(i => ({
-              date: options.day.date,
-              time: options.slots[i].time,
-              duration: options.slots[i].duration
-            }));
-            
-            // שמור את האופציות שנבחרו
-            await supabase
-              .from('leads')
-              .update({ 
-                notes: appointmentLead.notes.replace(
-                  /\[SELECTING_APPOINTMENT_TIMES\]\|.+?(\n|$)/, 
-                  `[APPOINTMENT_OPTIONS]|${JSON.stringify(selectedSlots)}`
-                )
-              })
-              .eq('id', appointmentLead.id);
-            
-            // שלח ללקוח
-            let message = `שלום ${appointmentLead.customers.name}! 🎉\n\n`;
-            message += `${business.owner_name || 'בעל העסק'} מוכן לתאם פגישה.\n`;
-            message += `בחר/י את המועד המועדף:\n\n`;
-            
-            selectedSlots.forEach((slot, index) => {
-              const date = new Date(slot.date);
-              const dayName = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][date.getDay()];
-              const dateStr = date.toLocaleDateString('he-IL');
-              
-              message += `${index + 1}️⃣ *${dayName} ${dateStr}*\n`;
-              message += `   ⏰ ${slot.time}\n\n`;
-            });
-            
-            message += `השב/י עם המספר של המועד המועדף (1-${selectedSlots.length})`;
-            
-            await sendWhatsAppMessage(business, appointmentLead.customers.phone, message);
-            
-            // עדכן את הסטטוס של הלקוח
-            await supabase
-              .from('customers')
-              .update({ notes: `[WAITING_FOR_APPOINTMENT_CHOICE]|LEAD:${appointmentLead.id}` })
-              .eq('id', appointmentLead.customers.id);
-            
-            // הודע לבעל העסק
-            await sendWhatsAppMessage(business, normalizedOwner,
-              `✅ שלחתי ${selectedSlots.length} אופציות לתיאום פגישה ללקוח.\n\nאחכה לתשובתו ואעדכן אותך.`);
-            return;
-          } else {
-            await sendWhatsAppMessage(business, normalizedOwner,
-              '❌ אנא בחר 1-3 שעות מהרשימה.\nדוגמה: 1,3,5');
-            return;
-          }
-        }
-      }
-    }
-    
     // מצא את הפנייה האחרונה שממתינה לפעולה
     console.log('🔍 מחפש פנייה ממתינה לפעולה...');
     const { data: allPendingLeads } = await supabase
@@ -889,7 +752,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .select('*, quote_items(*), leads(*, customers(*))')
       .eq('status', 'pending_owner_approval')
       .eq('business_id', business.id)  // חשוב! לסנן רק הצעות של העסק הנוכחי
-      .or('notes.like.%[WAITING_FOR_EDIT_CHOICE]%,notes.like.%[WAITING_FOR_PRODUCT_ADDITION]%')
+      .like('notes', '%[WAITING_FOR_EDIT_CHOICE]%')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -944,65 +807,12 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       }
       
       if (messageText.trim() === '3') {
-        console.log('🎯 בעל העסק בחר: הנחה');
-        // עבור מייד להצגת רשימת פריטים
-        let itemsList = `🎯 *בחר פריט להנחה:*\n\n`;
-        editQuote.quote_items.forEach((item, index) => {
-          itemsList += `*${index + 1}. ${item.product_name || item.products?.name}*\n`;
-          itemsList += `   מחיר: ₪${item.unit_price.toFixed(2)} × ${item.quantity} = ₪${item.total_price.toFixed(2)}\n\n`;
-        });
-        
-        itemsList += `*99. הנחה כללית על כל ההצעה*\n\n`;
-        itemsList += `━━━━━━━━━━━━━━━━\n`;
-        itemsList += `👆 *שלח את מספר הפריט שתרצה להנחות*\n`;
-        itemsList += `או 99 להנחה כללית`;
-        
-        await sendWhatsAppMessage(business, normalizedOwner, itemsList);
-        await supabase.from('quotes').update({ notes: '[WAITING_FOR_DISCOUNT_ITEM_SELECTION]' }).eq('id', editQuote.id);
-        return;
-      }
-      
-      if (messageText.trim() === '4') {
-        console.log('➕ בעל העסק רוצה להוסיף פריט');
-        // הצג רשימת מוצרים להוספה
-        const { data: products } = await supabase
-          .from('products')
-          .select('*')
-          .eq('business_id', business.id)
-          .eq('is_active', true)
-          .order('name');
-        
-        if (products && products.length > 0) {
-          let productMessage = `➕ *בחר מוצרים להוספה להצעה:*\n\n`;
-          
-          products.forEach((product, index) => {
-            productMessage += `*${index + 1}.* ${product.name}\n`;
-            productMessage += `   💰 ₪${parseFloat(product.base_price).toFixed(2)}\n`;
-            if (product.description) {
-              productMessage += `   📝 ${product.description.substring(0, 50)}${product.description.length > 50 ? '...' : ''}\n`;
-            }
-            productMessage += `\n`;
-          });
-          
-          productMessage += `━━━━━━━━━━━━━━━━\n`;
-          productMessage += `📝 *השב עם מספרי המוצרים מופרדים בפסיקים*\n`;
-          productMessage += `*דוגמה:* 1,3,5`;
-          
-          await sendWhatsAppMessage(business, normalizedOwner, productMessage);
-          await supabase.from('quotes').update({ notes: '[WAITING_FOR_PRODUCT_ADDITION]' }).eq('id', editQuote.id);
-        } else {
-          await sendWhatsAppMessage(business, normalizedOwner, '❌ לא נמצאו מוצרים זמינים להוספה');
-        }
-        return;
-      }
-      
-      if (messageText.trim() === '5') {
         console.log('✅ בעל העסק אישר הצעה');
         await handleOwnerApproval(business, editQuote.id);
         return;
       }
       
-      if (messageText.trim() === '6') {
+      if (messageText.trim() === '4') {
         console.log('❌ בעל העסק ביטל הצעה');
         await supabase.from('quotes').delete().eq('id', editQuote.id);
         await sendWhatsAppMessage(business, normalizedOwner, '✅ ההצעה בוטלה.');
@@ -1011,7 +821,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
         return;
       }
       
-      if (messageText.trim() === '7') {
+      if (messageText.trim() === '5') {
         console.log('📋 בעל העסק מבקש לחזור לרשימת פניות');
         // נקה את הסימון מההצעה
         await supabase.from('quotes').update({ notes: '' }).eq('id', editQuote.id);
@@ -1031,7 +841,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .select('notes')
       .eq('status', 'pending_owner_approval')
       .eq('business_id', business.id)
-      .or('notes.like.%[WAITING_FOR_QUANTITY_CHANGE]%,notes.like.%[WAITING_FOR_PRICE_CHANGE]%,notes.like.%[WAITING_FOR_QUANTITY_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_PRICE_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_NEW_QUANTITY]%,notes.like.%[WAITING_FOR_NEW_PRICE]%,notes.like.%[WAITING_FOR_DISCOUNT_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_GENERAL_DISCOUNT]%,notes.like.%[WAITING_FOR_ITEM_DISCOUNT]%')
+      .or('notes.like.%[WAITING_FOR_QUANTITY_CHANGE]%,notes.like.%[WAITING_FOR_PRICE_CHANGE]%,notes.like.%[WAITING_FOR_QUANTITY_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_PRICE_ITEM_SELECTION]%,notes.like.%[WAITING_FOR_NEW_QUANTITY]%,notes.like.%[WAITING_FOR_NEW_PRICE]%')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -1043,28 +853,29 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       anyEditQuote.notes.includes('[WAITING_FOR_QUANTITY_ITEM_SELECTION]') ||
       anyEditQuote.notes.includes('[WAITING_FOR_PRICE_ITEM_SELECTION]') ||
       anyEditQuote.notes.includes('[WAITING_FOR_NEW_QUANTITY]') ||
-      anyEditQuote.notes.includes('[WAITING_FOR_NEW_PRICE]') ||
-      anyEditQuote.notes.includes('[WAITING_FOR_DISCOUNT_ITEM_SELECTION]') ||
-      anyEditQuote.notes.includes('[WAITING_FOR_GENERAL_DISCOUNT]') ||
-      anyEditQuote.notes.includes('[WAITING_FOR_ITEM_DISCOUNT]') ||
-      anyEditQuote.notes.includes('[WAITING_FOR_PRODUCT_ADDITION]')
+      anyEditQuote.notes.includes('[WAITING_FOR_NEW_PRICE]')
     );
     
     // בדוק קודם אם בעל העסק כתב "פגישה"
     if (messageText.toLowerCase().includes('פגישה')) {
       console.log('🗓️ בעל העסק רוצה לתאם פגישה');
       
-      // מצא פנייה עם הצעה מאושרת שמוכנה לתיאום
-      const { data: readyLeads } = await supabase
+      // מצא פניות עם הצעות שנשלחו או אושרו
+      const { data: leadsWithQuotes } = await supabase
         .from('leads')
         .select('*, customers(*), quotes(*)')
         .eq('business_id', business.id)
-        .like('notes', '%[READY_FOR_APPOINTMENT]%')
         .order('created_at', { ascending: false });
-        
+      
+      // סנן רק פניות עם הצעות שנשלחו או אושרו
+      const readyLeads = leadsWithQuotes?.filter(lead => 
+        lead.quotes?.some(quote => ['approved', 'sent'].includes(quote.status))
+      ) || [];
+      
       if (readyLeads && readyLeads.length > 0) {
         const lead = readyLeads[0];
-        await startAppointmentScheduling(business, lead, normalizedOwner);
+        const customer = lead.customers;
+        await startAppointmentScheduling(business, lead, customer, normalizedOwner);
         return;
       } else {
         await sendWhatsAppMessage(business, normalizedOwner, 
@@ -1109,15 +920,6 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
         if (anyQuote) {
           console.log(`🔍 נמצאה הצעה במצב: ${anyQuote.notes}`);
           // אם יש הצעה אבל היא לא במצב עריכה רגיל, תן הודעה ברורה
-          if (anyQuote.notes.includes('[WAITING_FOR_PRODUCT_ADDITION]')) {
-            await sendWhatsAppMessage(business, normalizedOwner, 
-              `🔄 אתה באמצע הוספת מוצרים להצעה.\n\nבחר מוצרים להוספה (דוגמה: 1,3,5)\nאו רשום "ביטול" לחזרה לתפריט`);
-            return;
-          } else if (anyQuote.notes.includes('[WAITING_FOR_DISCOUNT_ITEM_SELECTION]')) {
-            await sendWhatsAppMessage(business, normalizedOwner, 
-              `🔄 אתה באמצע בחירת פריט להנחה.\n\nבחר מספר פריט או 99 להנחה כללית\nאו רשום "ביטול" לחזרה לתפריט`);
-            return;
-          }
         }
         
         console.log('⚠️ בעל העסק ניסה לערוך אבל אין הצעה פעילה');
@@ -1308,82 +1110,6 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       return;
     }
     
-    // בדוק אם בעל העסק בוחר פריט להנחה - בדוק קודם לפני שינוי מחיר
-    const { data: discountItemSelect, error: discountError } = await supabase
-      .from('quotes')
-      .select('*, quote_items(*, products(*))')
-      .eq('status', 'pending_owner_approval')
-      .eq('business_id', business.id)
-      .like('notes', '%[WAITING_FOR_DISCOUNT_ITEM_SELECTION]%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    
-    if (discountError) {
-      console.log(`⚠️ שגיאה בחיפוש הצעה להנחה: ${discountError.message}`);
-    }
-    
-    console.log(`🔍 חיפוש הצעה למצב הנחה - נמצאה: ${discountItemSelect ? 'כן' : 'לא'}`);
-    if (discountItemSelect) {
-      console.log(`📝 מצב הצעה: ${discountItemSelect.notes}`);
-    }
-    
-    if (discountItemSelect) {
-      console.log(`🎯 בעל העסק בוחר פריט להנחה: ${messageText}`);
-      console.log(`📋 מצב הצעה: ${discountItemSelect.notes}`);
-      console.log(`📋 מספר פריטים: ${discountItemSelect.quote_items.length}`);
-      
-      // בדוק אם כתב "ביטול" או "חזור"
-      if (messageText.includes('ביטול') || messageText.includes('חזור')) {
-        await supabase.from('quotes').update({ 
-          notes: '[WAITING_FOR_EDIT_CHOICE]' 
-        }).eq('id', discountItemSelect.id);
-        await showUpdatedQuote(business, discountItemSelect.id, normalizedOwner);
-        return;
-      }
-      
-      const itemIndex = parseInt(messageText.trim());
-      
-      // בדוק אם זה לא מספר בכלל
-      if (isNaN(itemIndex)) {
-        await sendWhatsAppMessage(business, normalizedOwner, 
-          `❌ אנא הזן מספר פריט (1-${discountItemSelect.quote_items.length}) או 99 להנחה כללית\n\nאו כתוב "ביטול" לחזרה לתפריט`);
-        return;
-      }
-      
-      if (itemIndex === 99) {
-        // הנחה כללית
-        await sendWhatsAppMessage(business, normalizedOwner,
-          `🎯 *הנחה כללית על כל ההצעה*\n\n` +
-          `סכום נוכחי: ₪${discountItemSelect.amount.toFixed(2)}\n\n` +
-          `💸 *מה אחוז ההנחה?*\n` +
-          `רשום רק מספר, לדוגמה: 10`);
-        
-        await supabase.from('quotes').update({ 
-          notes: `[WAITING_FOR_GENERAL_DISCOUNT]` 
-        }).eq('id', discountItemSelect.id);
-        
-        return;
-      } else if (itemIndex > 0 && itemIndex <= discountItemSelect.quote_items.length) {
-        const selectedItem = discountItemSelect.quote_items[itemIndex - 1];
-        
-        await sendWhatsAppMessage(business, normalizedOwner,
-          `🎯 *${selectedItem.product_name || selectedItem.products?.name || 'מוצר'}*\n\n` +
-          `מחיר נוכחי: ₪${selectedItem.unit_price.toFixed(2)} × ${selectedItem.quantity} = ₪${selectedItem.total_price.toFixed(2)}\n\n` +
-          `💸 *מה אחוז ההנחה?*\n` +
-          `רשום רק מספר, לדוגמה: 10`);
-        
-        await supabase.from('quotes').update({ 
-          notes: `[WAITING_FOR_ITEM_DISCOUNT]:${itemIndex - 1}` 
-        }).eq('id', discountItemSelect.id);
-        
-        return;
-      } else {
-        await sendWhatsAppMessage(business, normalizedOwner, 
-          `❌ מספר פריט לא תקין (${itemIndex}).\n\nבחר מספר מהרשימה:\n1-${discountItemSelect.quote_items.length} לפריט ספציפי\n99 להנחה כללית`);
-        return;
-      }
-    }
     
     // בדוק אם בעל העסק בוחר פריט לשינוי מחיר
     const { data: priceItemSelect } = await supabase
@@ -1499,202 +1225,148 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       }
     }
     
-    // בדוק אם בעל העסק מזין אחוז הנחה כללית
-    const { data: generalDiscountQuote } = await supabase
-      .from('quotes')
-      .select('*, quote_items(*)')
-      .eq('status', 'pending_owner_approval')
+    
+    // בדוק אם בעל העסק בוחר יום לפגישה
+    const { data: selectingDayLead } = await supabase
+      .from('leads')
+      .select('*, customers(*)')
       .eq('business_id', business.id)
-      .like('notes', '%[WAITING_FOR_GENERAL_DISCOUNT]%')
+      .like('notes', '%[SELECTING_APPOINTMENT_DAY]%')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
     
-    if (generalDiscountQuote) {
-      console.log(`💸 מעדכן הנחה כללית: ${messageText}%`);
-      const discountPercent = parseFloat(messageText.trim());
-      
-      if (discountPercent > 0 && discountPercent <= 100) {
-        // חשב את הסכום המקורי לפני הנחה
-        const subtotal = generalDiscountQuote.quote_items.reduce((sum, item) => sum + item.total_price, 0);
-        const discountAmount = subtotal * (discountPercent / 100);
-        const newTotal = subtotal - discountAmount;
+    if (selectingDayLead) {
+      console.log('🗓️ בעל העסק בוחר יום לפגישה');
+      const optionsMatch = selectingDayLead.notes.match(/\[SELECTING_APPOINTMENT_DAY\]\|(.+?)(\n|$)/);
+      if (optionsMatch) {
+        const daysOptions = JSON.parse(optionsMatch[1]);
+        const dayChoice = parseInt(messageText.trim());
         
-        console.log(`📊 חישוב הנחה: סכום ביניים ₪${subtotal}, הנחה ₪${discountAmount}, סה"כ ₪${newTotal}`);
-        
-        // עדכן את ההצעה עם ההנחה
-        const { error: updateError } = await supabase
-          .from('quotes')
-          .update({
-            discount_percentage: discountPercent,
-            discount_amount: discountAmount,
-            amount: newTotal,
-            notes: '[WAITING_FOR_EDIT_CHOICE]'
-          })
-          .eq('id', generalDiscountQuote.id);
+        if (dayChoice > 0 && dayChoice <= daysOptions.length) {
+          const selectedDay = daysOptions[dayChoice - 1];
           
-        if (updateError) {
-          console.error('❌ שגיאה בעדכון הנחה:', updateError);
-        } else {
-          console.log('✅ הנחה עודכנה בהצלחה');
-        }
-        
-        // הצג הצעה מעודכנת
-        await showUpdatedQuote(business, generalDiscountQuote.id, normalizedOwner);
-        return;
-      } else {
-        await sendWhatsAppMessage(business, normalizedOwner, 
-          '❌ אנא הזן אחוז הנחה תקין (1-100)');
-        return;
-      }
-    }
-    
-    // הקוד של בחירת יום ושעות הועבר למעלה לטיפול מוקדם יותר
-    
-    // בדוק אם בעל העסק מזין אחוז הנחה לפריט
-    const { data: itemDiscountQuote } = await supabase
-      .from('quotes')
-      .select('*, quote_items(*, products(*))')
-      .eq('status', 'pending_owner_approval')
-      .eq('business_id', business.id)
-      .like('notes', '%[WAITING_FOR_ITEM_DISCOUNT]%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    
-    if (itemDiscountQuote) {
-      const discountPercent = parseFloat(messageText.trim());
-      
-      if (discountPercent > 0 && discountPercent <= 100) {
-        // חלץ את האינדקס מה-notes
-        const itemIndex = parseInt(itemDiscountQuote.notes.match(/\[WAITING_FOR_ITEM_DISCOUNT\]:(\d+)/)[1]);
-        const item = itemDiscountQuote.quote_items[itemIndex];
-        
-        // חשב מחיר חדש אחרי הנחה
-        const discountAmount = item.unit_price * (discountPercent / 100);
-        const newUnitPrice = item.unit_price - discountAmount;
-        const newItemTotal = newUnitPrice * item.quantity;
-        
-        // עדכן את הפריט
-        await supabase
-          .from('quote_items')
-          .update({
-            unit_price: newUnitPrice,
-            total_price: newItemTotal,
-            discount_percentage: discountPercent
-          })
-          .eq('id', item.id);
-        
-        // חשב מחדש את הסכום הכולל
-        const { data: updatedItems } = await supabase
-          .from('quote_items')
-          .select('*')
-          .eq('quote_id', itemDiscountQuote.id);
-        
-        const newQuoteTotal = updatedItems.reduce((sum, item) => sum + item.total_price, 0);
-        
-        // עדכן את ההצעה
-        await supabase
-          .from('quotes')
-          .update({
-            amount: newQuoteTotal,
-            notes: '[WAITING_FOR_EDIT_CHOICE]'
-          })
-          .eq('id', itemDiscountQuote.id);
-        
-        // הצג הצעה מעודכנת
-        await showUpdatedQuote(business, itemDiscountQuote.id, normalizedOwner);
-        return;
-      } else {
-        await sendWhatsAppMessage(business, normalizedOwner, 
-          '❌ אנא הזן אחוז הנחה תקין (1-100)');
-        return;
-      }
-    }
-    
-    // בדוק אם יש הצעה עם [WAITING_FOR_PRODUCT_ADDITION] ונשלחו מספרים
-    const { data: productAdditionQuote } = await supabase
-      .from('quotes')
-      .select('*, quote_items(*, products(*))')
-      .eq('status', 'pending_owner_approval')
-      .eq('business_id', business.id)
-      .like('notes', '%[WAITING_FOR_PRODUCT_ADDITION]%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-      
-    if (productAdditionQuote && messageText.match(/^[\d,\s]+$/)) {
-      console.log('➕ מוסיף מוצרים להצעה:', messageText);
-      
-      // חלץ את המספרים
-      const selectedNumbers = messageText.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n));
-      
-      if (selectedNumbers.length > 0) {
-        // שלוף את המוצרים
-        const { data: allProducts } = await supabase
-          .from('products')
-          .select('*')
-          .eq('business_id', business.id)
-          .eq('is_active', true)
-          .order('name');
-        
-        const selectedProducts = selectedNumbers
-          .map(num => allProducts[num - 1])
-          .filter(p => p != null);
-        
-        if (selectedProducts.length > 0) {
-          // הוסף את המוצרים החדשים להצעה
-          const newItems = selectedProducts.map(product => ({
-            quote_id: productAdditionQuote.id,
-            product_id: product.id,
-            product_name: product.name,
-            product_description: product.description,
-            quantity: 1,
-            unit_price: parseFloat(product.base_price),
-            total_price: parseFloat(product.base_price),
-            discount_percentage: 0
-          }));
+          // חשב שעות פנויות ביום שנבחר
+          const slots = await calculateDaySlots(
+            business.id, 
+            selectedDay.date, 
+            selectedDay.availability
+          );
           
-          const { error: insertError } = await supabase
-            .from('quote_items')
-            .insert(newItems);
-          
-          if (!insertError) {
-            // חשב מחדש את הסכום הכולל
-            const { data: allItems } = await supabase
-              .from('quote_items')
-              .select('*')
-              .eq('quote_id', productAdditionQuote.id);
-            
-            const newTotal = allItems.reduce((sum, item) => sum + item.total_price, 0);
-            
-            // עדכן את ההצעה
-            await supabase
-              .from('quotes')
-              .update({
-                amount: newTotal,
-                notes: '[WAITING_FOR_EDIT_CHOICE]'
-              })
-              .eq('id', productAdditionQuote.id);
-            
-            await sendWhatsAppMessage(business, normalizedOwner, 
-              `✅ הוספתי ${selectedProducts.length} מוצרים להצעה!`);
-            
-            // הצג הצעה מעודכנת
-            await showUpdatedQuote(business, productAdditionQuote.id, normalizedOwner);
-          } else {
-            console.error('❌ שגיאה בהוספת מוצרים:', insertError);
-            await sendWhatsAppMessage(business, normalizedOwner, '❌ שגיאה בהוספת המוצרים');
+          if (slots.length === 0) {
+            await sendWhatsAppMessage(business, normalizedOwner,
+              '❌ אין שעות פנויות ביום זה. בחר יום אחר.');
+            return;
           }
+          
+          // הצג שעות לבחירה
+          let message = `📅 *${selectedDay.dayName} ${selectedDay.displayDate}*\n\n`;
+          message += '⏰ *בחר שעות לפגישה:*\n';
+          message += '(תוכל לבחור עד 3 אופציות)\n\n';
+          
+          slots.forEach((slot, index) => {
+            message += `${index + 1}. ${slot.time}\n`;
+          });
+          
+          message += '\n*דוגמה:* 1,3,5 (לבחירת שעות 1, 3 ו-5)\n';
+          message += 'או רק מספר אחד לאופציה בודדת';
+          
+          // עדכן את ה-notes
+          await supabase
+            .from('leads')
+            .update({ 
+              notes: selectingDayLead.notes.replace(
+                /\[SELECTING_APPOINTMENT_DAY\]\|.+?(\n|$)/, 
+                `[SELECTING_APPOINTMENT_TIMES]|${JSON.stringify({
+                  day: selectedDay,
+                  slots: slots
+                })}`
+              )
+            })
+            .eq('id', selectingDayLead.id);
+          
+          await sendWhatsAppMessage(business, normalizedOwner, message);
         } else {
-          await sendWhatsAppMessage(business, normalizedOwner, '❌ לא זיהיתי מוצרים תקינים');
+          await sendWhatsAppMessage(business, normalizedOwner,
+            '❌ אנא בחר מספר תקין מהרשימה');
         }
-      } else {
-        await sendWhatsAppMessage(business, normalizedOwner, 
-          '❌ לא זיהיתי מספרים. נסה שוב בפורמט: 1,3,5');
       }
       return;
     }
+    
+    // בדוק אם בעל העסק בוחר שעות לפגישה
+    const { data: selectingTimesLead } = await supabase
+      .from('leads')
+      .select('*, customers(*)')
+      .eq('business_id', business.id)
+      .like('notes', '%[SELECTING_APPOINTMENT_TIMES]%')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (selectingTimesLead) {
+      const optionsMatch = selectingTimesLead.notes.match(/\[SELECTING_APPOINTMENT_TIMES\]\|(.+?)(\n|$)/);
+      if (optionsMatch) {
+        const options = JSON.parse(optionsMatch[1]);
+        const selectedIndices = messageText.split(',').map(s => parseInt(s.trim()) - 1);
+        
+        // בדוק שכל האינדקסים תקינים
+        const validIndices = selectedIndices.filter(i => i >= 0 && i < options.slots.length);
+        
+        if (validIndices.length > 0 && validIndices.length <= 3) {
+          const selectedSlots = validIndices.map(i => ({
+            date: options.day.date,
+            time: options.slots[i].time,
+            duration: options.slots[i].duration
+          }));
+          
+          // שמור את האופציות שנבחרו
+          await supabase
+            .from('leads')
+            .update({ 
+              notes: selectingTimesLead.notes.replace(
+                /\[SELECTING_APPOINTMENT_TIMES\]\|.+?(\n|$)/, 
+                `[APPOINTMENT_OPTIONS]|${JSON.stringify(selectedSlots)}`
+              )
+            })
+            .eq('id', selectingTimesLead.id);
+          
+          // שלח ללקוח
+          let message = `שלום ${selectingTimesLead.customers.name}! 🎉\n\n`;
+          message += `${business.owner_name || 'בעל העסק'} מוכן לתאם פגישה.\n`;
+          message += `בחר/י את המועד המועדף:\n\n`;
+          
+          selectedSlots.forEach((slot, index) => {
+            const date = new Date(slot.date);
+            const dayName = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][date.getDay()];
+            const dateStr = date.toLocaleDateString('he-IL');
+            
+            message += `${index + 1}️⃣ *${dayName} ${dateStr}*\n`;
+            message += `   ⏰ ${slot.time}\n\n`;
+          });
+          
+          message += `השב/י עם המספר של המועד המועדף (1-${selectedSlots.length})`;
+          
+          await sendWhatsAppMessage(business, selectingTimesLead.customers.phone, message);
+          
+          // עדכן את הסטטוס של הלקוח
+          await supabase
+            .from('customers')
+            .update({ notes: `[WAITING_FOR_APPOINTMENT_CHOICE]|LEAD:${selectingTimesLead.id}` })
+            .eq('id', selectingTimesLead.customers.id);
+          
+          // הודע לבעל העסק
+          await sendWhatsAppMessage(business, normalizedOwner,
+            `✅ שלחתי ${selectedSlots.length} אופציות לתיאום פגישה ללקוח.\n\nאחכה לתשובתו ואעדכן אותך.`);
+        } else {
+          await sendWhatsAppMessage(business, normalizedOwner,
+            '❌ אנא בחר 1-3 שעות מהרשימה.\nדוגמה: 1,3,5');
+        }
+      }
+      return;
+    }
+    
+    
     
     // בדוק אם זו תשובה מיוחדת
     if (messageText.toLowerCase().includes('אישור')) {
@@ -1712,15 +1384,19 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
     if (messageText.toLowerCase().includes('פגישה')) {
       console.log('🗓️ בעל העסק רוצה לתאם פגישה');
       
-      // מצא פנייה עם הצעה מאושרת שמוכנה לתיאום
-      const { data: readyLeads } = await supabase
+      // מצא פניות עם הצעות שנשלחו או אושרו
+      const { data: leadsWithQuotes } = await supabase
         .from('leads')
         .select('*, customers(*), quotes(*)')
         .eq('business_id', business.id)
-        .like('notes', '%[READY_FOR_APPOINTMENT]%')
         .order('created_at', { ascending: false });
       
-      if (!readyLeads || readyLeads.length === 0) {
+      // סנן רק פניות עם הצעות שנשלחו או אושרו
+      const readyLeads = leadsWithQuotes?.filter(lead => 
+        lead.quotes?.some(quote => ['approved', 'sent'].includes(quote.status))
+      ) || [];
+      
+      if (readyLeads.length === 0) {
         await sendWhatsAppMessage(business, normalizedOwner, 
           '❌ לא נמצאו פניות עם הצעות מאושרות שממתינות לתיאום פגישה.\n\nתאשר קודם הצעת מחיר ללקוח.');
         return;
@@ -2179,11 +1855,20 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_FULL_ADDRESS]')) {
         `תודה על הסבלנות! 😊`
       );
       
-      // עדכן את ה-lead עם סימון שצריך לתאם פגישה
+      // עדכן את ה-lead עם סימון שצריך לתאם פגישה וסטטוס approved
       await supabase
         .from('leads')
-        .update({ notes: (quote.leads.notes || '') + '\n[READY_FOR_APPOINTMENT]' })
+        .update({ 
+          notes: (quote.leads.notes || '') + '\n[READY_FOR_APPOINTMENT]',
+          status: 'approved'
+        })
         .eq('id', quote.leads.id);
+        
+      // עדכן גם את סטטוס ההצעה ל-approved
+      await supabase
+        .from('quotes')
+        .update({ status: 'approved' })
+        .eq('id', quoteId);
     }
   }
   return;
@@ -2820,11 +2505,9 @@ async function showUpdatedQuote(business, quoteId, ownerPhone) {
     message += `*מה תרצה לעשות?*\n\n`;
     message += `1️⃣ שינוי כמות\n`;
     message += `2️⃣ שינוי מחיר\n`;
-    message += `3️⃣ הוספת הנחה\n`;
-    message += `4️⃣ הוספת פריט\n`;
-    message += `5️⃣ אישור ושליחה ללקוח ✅\n`;
-    message += `6️⃣ ביטול ההצעה ❌\n`;
-    message += `7️⃣ חזרה לרשימת פניות 📋\n\n`;
+    message += `3️⃣ אישור ושליחה ללקוח ✅\n`;
+    message += `4️⃣ ביטול ההצעה ❌\n`;
+    message += `5️⃣ חזרה לרשימת פניות 📋\n\n`;
     message += `השב עם המספר של הפעולה הרצויה`;
     
     await sendWhatsAppMessage(business, ownerPhone, message);
@@ -2974,10 +2657,8 @@ async function handleOwnerProductSelection(business, selectionText) {
     previewMessage += `*מה תרצה לעשות?*\n\n`;
     previewMessage += `1️⃣ שינוי כמות\n`;
     previewMessage += `2️⃣ שינוי מחיר\n`;
-    previewMessage += `3️⃣ הוספת הנחה\n`;
-    previewMessage += `4️⃣ הוספת פריט\n`;
-    previewMessage += `5️⃣ אישור ושליחה ללקוח ✅\n`;
-    previewMessage += `6️⃣ ביטול ההצעה ❌\n\n`;
+    previewMessage += `3️⃣ אישור ושליחה ללקוח ✅\n`;
+    previewMessage += `4️⃣ ביטול ההצעה ❌\n\n`;
     previewMessage += `השב עם המספר של הפעולה הרצויה`;
     
     // ה-notes כבר נשמר ביצירת ההצעה, אין צורך לעדכן שוב
@@ -3097,10 +2778,9 @@ async function handleQuantityInput(business, lead, quantityText) {
     previewMessage += `📋 *מה תרצה לעשות?*\n`;
     previewMessage += `1️⃣ *שינוי כמות* - עדכן כמות למוצרים\n`;
     previewMessage += `2️⃣ *שינוי מחיר* - עדכן מחיר למוצר\n`;
-    previewMessage += `3️⃣ *הנחה* - הוסף הנחה למוצר או כללית\n`;
-    previewMessage += `4️⃣ *אישור* - שלח ללקוח\n`;
-    previewMessage += `5️⃣ *ביטול* - בטל הצעה\n\n`;
-    previewMessage += `השב עם המספר (1-5)`;
+    previewMessage += `3️⃣ *אישור* - שלח ללקוח\n`;
+    previewMessage += `4️⃣ *ביטול* - בטל הצעה\n\n`;
+    previewMessage += `השב עם המספר (1-4)`;
     
     // שמור ב-notes שממתינים לבחירת עריכה
     await supabase
@@ -3175,7 +2855,7 @@ async function handleOwnerApproval(business, quoteId = null) {
       // אם יש quoteId, השתמש בו
       const { data } = await supabase
         .from('quotes')
-        .select('*, leads(*, customers(*))')
+        .select('*, leads(*, customers(*)), quote_items(*)')
         .eq('id', quoteId)
         .single();
       quote = data;
@@ -3183,7 +2863,7 @@ async function handleOwnerApproval(business, quoteId = null) {
       // אחרת, מצא את ההצעה האחרונה שממתינה לאישור
       const { data } = await supabase
       .from('quotes')
-      .select('*, leads(*, customers(*))')
+      .select('*, leads(*, customers(*)), quote_items(*)')
       .eq('status', 'pending_owner_approval')
         .eq('business_id', business.id)
       .order('created_at', { ascending: false })
@@ -3198,21 +2878,52 @@ async function handleOwnerApproval(business, quoteId = null) {
       return;
     }
     
-    // עדכן סטטוס להצעה מאושרת
+    // עדכן סטטוס להצעה מאושרת ועדכן את הטקסט
     await supabase
       .from('quotes')
-      .update({ status: 'sent' })
+      .update({ 
+        status: 'sent',
+        quote_text: generateDetailedQuoteText(quote.quote_items.map(item => ({
+          product: {
+            name: item.product_name,
+            description: item.product_description
+          },
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price
+        })))
+      })
       .eq('id', quote.id);
+    
+    // עדכן גם את סטטוס ה-lead
+    await supabase
+      .from('leads')
+      .update({ status: 'quoted' })
+      .eq('id', quote.lead_id);
     
     // שלח ללקוח
     const customerPhone = quote.leads.customers.phone;
     const customerName = quote.leads.customers.name;
     
+    // הכן את פריטי ההצעה לטקסט המעודכן
+    const quoteItems = quote.quote_items.map(item => ({
+      product: {
+        name: item.product_name,
+        description: item.product_description
+      },
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      total_price: item.total_price
+    }));
+    
+    // ייצר טקסט מעודכן של ההצעה
+    const updatedQuoteText = generateDetailedQuoteText(quoteItems);
+    
     const customerMessage = `שלום ${customerName}! 😊
 
 הצעת המחיר שלך מוכנה! 🎉
 
-${quote.quote_text}
+${updatedQuoteText}
 
 💳 *לאישור ההצעה:*
 🔗 ${process.env.FRONTEND_URL || process.env.WEBHOOK_URL || 'https://whatscrm-server.onrender.com'}/quote/${quote.id}
@@ -4075,14 +3786,13 @@ app.get('/approve-quote/:quoteId', async (req, res) => {
         </html>
       `;
       
-      // המרה ל-PDF (נצטרך להוסיף ספריית PDF בהמשך)
       // כרגע נשמור את ה-HTML כקובץ טקסט
       const fileName = `quote_${quoteId}_${Date.now()}.html`;
-      const filePath = `quotes-pdfs/${fileName}`;
+      const filePath = fileName;
       
       // שמור ב-Storage
       const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('quotes-pdfs')
+        .from('quote-pdfs')
         .upload(filePath, htmlContent, {
           contentType: 'text/html',
           upsert: false
@@ -4103,12 +3813,6 @@ app.get('/approve-quote/:quoteId', async (req, res) => {
     } catch (pdfError) {
       console.error('❌ שגיאה ביצירת PDF:', pdfError);
     }
-    
-    // עדכן את סטטוס הפנייה ל-approved
-    await supabase
-      .from('leads')
-      .update({ status: 'approved' })
-      .eq('id', quote.lead_id);
     
     await sendWhatsAppMessage(business, business.owner_phone, 
       `✅ *הצעת מחיר אושרה!*\n\n` +
@@ -4477,14 +4181,122 @@ async function calculateAvailableSlots(businessId, availability) {
 }
 
 // ========================================
+// 🔔 תזכורות יומיות
+// ========================================
+function scheduleDailyReminders() {
+  // חשב כמה זמן עד 20:00
+  const now = new Date();
+  const tonight = new Date(now);
+  tonight.setHours(20, 0, 0, 0);
+  
+  // אם כבר עברנו את 20:00, קבע למחר
+  if (now > tonight) {
+    tonight.setDate(tonight.getDate() + 1);
+  }
+  
+  const msUntilTonight = tonight - now;
+  
+  // קבע טיימר ראשוני
+  setTimeout(() => {
+    sendDailyReminders();
+    
+    // ואז הפעל כל 24 שעות
+    setInterval(sendDailyReminders, 24 * 60 * 60 * 1000);
+  }, msUntilTonight);
+  
+  console.log(`⏰ תזכורות יומיות יופעלו ב-20:00 (בעוד ${Math.round(msUntilTonight / 1000 / 60)} דקות)`);
+}
+
+async function sendDailyReminders() {
+  console.log('🔔 שולח תזכורות יומיות...');
+  
+  try {
+    // מצא את כל הפגישות של מחר
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    
+    const { data: appointments } = await supabase
+      .from('appointments')
+      .select('*, leads(*, businesses(*)), customers(*)')
+      .eq('appointment_date', tomorrowStr)
+      .in('status', ['confirmed', 'pending']);
+    
+    if (!appointments || appointments.length === 0) {
+      console.log('📅 אין פגישות מחר');
+      return;
+    }
+    
+    console.log(`📅 נמצאו ${appointments.length} פגישות מחר`);
+    
+    // קבץ לפי עסק
+    const appointmentsByBusiness = {};
+    
+    for (const appointment of appointments) {
+      const businessId = appointment.business_id;
+      if (!appointmentsByBusiness[businessId]) {
+        appointmentsByBusiness[businessId] = {
+          business: appointment.leads.businesses,
+          appointments: []
+        };
+      }
+      appointmentsByBusiness[businessId].appointments.push(appointment);
+    }
+    
+    // שלח תזכורות לכל עסק
+    for (const businessData of Object.values(appointmentsByBusiness)) {
+      const { business, appointments } = businessData;
+      
+      // תזכורת לבעל העסק
+      let ownerMessage = `🔔 *תזכורת - פגישות מחר*\n\n`;
+      ownerMessage += `יש לך ${appointments.length} פגישות מחר:\n\n`;
+      
+      for (const apt of appointments) {
+        ownerMessage += `⏰ *${apt.appointment_time.substring(0, 5)}*\n`;
+        ownerMessage += `👤 ${apt.customers.name}\n`;
+        ownerMessage += `📱 ${apt.customers.phone}\n`;
+        ownerMessage += `📍 ${apt.location}\n`;
+        ownerMessage += `━━━━━━━━━━━━━━━━\n`;
+      }
+      
+      ownerMessage += `\n💪 בהצלחה!`;
+      
+      await sendWhatsAppMessage(business, normalizePhone(business.owner_phone), ownerMessage);
+      
+      // תזכורות ללקוחות
+      for (const apt of appointments) {
+        const customerMessage = `שלום ${apt.customers.name}! 👋\n\n` +
+          `זוהי תזכורת על הפגישה שלך מחר:\n\n` +
+          `📅 ${tomorrow.toLocaleDateString('he-IL')}\n` +
+          `⏰ ${apt.appointment_time.substring(0, 5)}\n` +
+          `📍 ${apt.location}\n` +
+          `🔧 ${business.business_name}\n\n` +
+          `נתראה מחר! 😊`;
+        
+        await sendWhatsAppMessage(business, apt.customers.phone, customerMessage);
+      }
+    }
+    
+    console.log('✅ תזכורות נשלחו בהצלחה');
+    
+  } catch (error) {
+    console.error('❌ שגיאה בשליחת תזכורות:', error);
+  }
+}
+
+// ========================================
 // 🚀 Start Server
 // ========================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 WhatsCRM Server v2.1 FIXED running on port ${PORT}`);
+  
+  // הפעל תזכורות יומיות
+  scheduleDailyReminders();
   console.log(`📡 Webhook URL: http://localhost:${PORT}/webhook/whatsapp`);
   console.log(`🧠 Claude AI: ${process.env.ANTHROPIC_API_KEY ? 'Enabled ✅' : 'Disabled ❌'}`);
   console.log(`💾 Media Storage: Enabled ✅`);
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
   console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });
+

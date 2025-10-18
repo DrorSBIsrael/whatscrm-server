@@ -547,12 +547,34 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       .limit(1)
       .single();
 
-    if (recentLead && recentLead.status !== 'completed') {
-      console.log('🔕 לקוח עם פנייה פעילה - בודק סטטוס...');
-      console.log(`📋 מצב פנייה (24h): ${recentLead.notes || 'ללא מצב'}`);
-      
-      // בדוק אם בעל העסק מחכה לפעולה מהלקוח
-      if (recentLead.notes && recentLead.notes.includes('[WAITING_FOR_OWNER_ACTION]')) {
+      if (recentLead && recentLead.status !== 'completed') {
+        console.log('🔕 לקוח עם פנייה פעילה - בודק סטטוס...');
+        console.log(`📋 מצב פנייה (24h): ${recentLead.notes || 'ללא מצב'}`);
+        
+        // בדוק אם יש פגישה מתוזמנת
+        if (recentLead.status === 'scheduled') {
+          console.log('📅 ללקוח יש פגישה מתוזמנת');
+          
+          // שלח תזכורת לבעל העסק על ההודעה החדשה
+          await sendWhatsAppMessage(business, normalizePhone(business.owner_phone),
+            `💬 *הודעה חדשה מלקוח עם פגישה מתוזמנת*\n\n` +
+            `👤 ${customer.name}\n` +
+            `📱 ${customer.phone}\n` +
+            `📝 "${messageText}"\n\n` +
+            `📅 יש לכם פגישה מתוזמנת`);
+          
+          // ענה ללקוח בצורה אישית
+          await sendWhatsAppMessage(business, phoneNumber,
+            `תודה ${customer.name}! 📨\n\n` +
+            `שלחתי את ההודעה שלך ל${business.owner_name || 'בעל העסק'}.\n` +
+            `הוא יצור איתך קשר בקרוב.\n\n` +
+            `יש לכם פגישה מתוזמנת, ואני כאן אם יש לך שאלות נוספות 😊`);
+          
+          return;
+        }
+        
+        // בדוק אם בעל העסק מחכה לפעולה מהלקוח
+        if (recentLead.notes && recentLead.notes.includes('[WAITING_FOR_OWNER_ACTION]')) {
         console.log('[WAITING_FOR_OWNER_ACTION]');
         
         // אם כבר שאלנו והלקוח ענה, אל תשאל שוב
@@ -569,18 +591,20 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
             const latestQuote = recentLead.quotes[0];
             
             if (latestQuote.status === 'approved') {
-              // הצעה מאושרת - שאל אם הפנייה קשורה
-              await sendWhatsAppMessage(business, phoneNumber,
-                `שלום ${customer.name}! 👋\n\nאני רואה שיש לך הצעת מחיר מאושרת #${leadNumber}\n\n` +
-                `האם הפנייה הנוכחית קשורה להצעה זו?\n\n` +
-                `▫️ כן - אשלח תזכורת לבעל העסק\n` +
-                `▫️ לא - אפתח פנייה חדשה`);
+              // הצעה מאושרת - שלח תזכורת ישירות
+              await sendWhatsAppMessage(business, normalizePhone(business.owner_phone),
+                `💬 *הודעה חדשה מלקוח עם הצעה מאושרת*\n\n` +
+                `👤 ${customer.name}\n` +
+                `📱 ${customer.phone}\n` +
+                `📝 "${messageText}"\n\n` +
+                `📋 הצעה #${leadNumber} - מאושרת`);
               
-              // שמור מצב המתנה לתשובה
-              await supabase
-                .from('customers')
-                .update({ notes: `[WAITING_FOR_RELATED_LEAD_ANSWER]|LEAD:${recentLead.id}` })
-                .eq('id', customer.id);
+              await sendWhatsAppMessage(business, phoneNumber,
+                `תודה ${customer.name}! 📨\n\n` +
+                `שלחתי תזכורת ל${business.owner_name || 'בעל העסק'}.\n` +
+                `הוא יצור איתך קשר בקרוב לתיאום הפגישה.\n\n` +
+                `בינתיים, אני כאן אם יש לך שאלות נוספות 😊`);
+              
               return;
             } else if (latestQuote.status === 'pending' || latestQuote.status === 'sent') {
               await sendWhatsAppMessage(business, phoneNumber,

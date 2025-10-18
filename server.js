@@ -594,6 +594,143 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
   if (normalizedIncoming === normalizedOwner) {
     console.log('👨‍💼 הודעה מבעל העסק!');
     
+    // בדוק קודם אם בעל העסק בתהליך תיאום פגישה
+    const { data: appointmentLead } = await supabase
+      .from('leads')
+      .select('*, customers(*)')
+      .eq('business_id', business.id)
+      .or('notes.like.%[SELECTING_APPOINTMENT_DAY]%,notes.like.%[SELECTING_APPOINTMENT_TIMES]%')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (appointmentLead) {
+      // בדוק אם בוחר יום
+      if (appointmentLead.notes.includes('[SELECTING_APPOINTMENT_DAY]')) {
+        console.log('🗓️ בעל העסק בוחר יום לפגישה');
+        const optionsMatch = appointmentLead.notes.match(/\[SELECTING_APPOINTMENT_DAY\]\|(.+?)(\n|$)/);
+        if (optionsMatch) {
+          const daysOptions = JSON.parse(optionsMatch[1]);
+          const dayChoice = parseInt(messageText.trim());
+          
+          if (dayChoice > 0 && dayChoice <= daysOptions.length) {
+            const selectedDay = daysOptions[dayChoice - 1];
+            
+            // חשב שעות פנויות ביום שנבחר
+            const slots = await calculateDaySlots(
+              business.id, 
+              selectedDay.date, 
+              selectedDay.availability
+            );
+            
+            if (slots.length === 0) {
+              await sendWhatsAppMessage(business, normalizedOwner,
+                '❌ אין שעות פנויות ביום זה. בחר יום אחר.');
+              return;
+            }
+            
+            // הצג שעות לבחירה
+            let message = `📅 *${selectedDay.dayName} ${selectedDay.displayDate}*\n\n`;
+            message += '⏰ *בחר שעות לפגישה:*\n';
+            message += '(תוכל לבחור עד 3 אופציות)\n\n';
+            
+            slots.forEach((slot, index) => {
+              message += `${index + 1}. ${slot.time}\n`;
+            });
+            
+            message += '\n*דוגמה:* 1,3,5 (לבחירת שעות 1, 3 ו-5)\n';
+            message += 'או רק מספר אחד לאופציה בודדת';
+            
+            // עדכן את ה-notes
+            await supabase
+              .from('leads')
+              .update({ 
+                notes: appointmentLead.notes.replace(
+                  /\[SELECTING_APPOINTMENT_DAY\]\|.+?(\n|$)/, 
+                  `[SELECTING_APPOINTMENT_TIMES]|${JSON.stringify({
+                    day: selectedDay,
+                    slots: slots
+                  })}`
+                )
+              })
+              .eq('id', appointmentLead.id);
+            
+            await sendWhatsAppMessage(business, normalizedOwner, message);
+            return;
+          } else {
+            await sendWhatsAppMessage(business, normalizedOwner,
+              '❌ אנא בחר מספר תקין מהרשימה');
+            return;
+          }
+        }
+      }
+      
+      // בדוק אם בוחר שעות
+      if (appointmentLead.notes.includes('[SELECTING_APPOINTMENT_TIMES]')) {
+        console.log('⏰ בעל העסק בוחר שעות לפגישה');
+        const optionsMatch = appointmentLead.notes.match(/\[SELECTING_APPOINTMENT_TIMES\]\|(.+?)(\n|$)/);
+        if (optionsMatch) {
+          const options = JSON.parse(optionsMatch[1]);
+          const selectedIndices = messageText.split(',').map(s => parseInt(s.trim()) - 1);
+          
+          // בדוק שכל האינדקסים תקינים
+          const validIndices = selectedIndices.filter(i => i >= 0 && i < options.slots.length);
+          
+          if (validIndices.length > 0 && validIndices.length <= 3) {
+            const selectedSlots = validIndices.map(i => ({
+              date: options.day.date,
+              time: options.slots[i].time,
+              duration: options.slots[i].duration
+            }));
+            
+            // שמור את האופציות שנבחרו
+            await supabase
+              .from('leads')
+              .update({ 
+                notes: appointmentLead.notes.replace(
+                  /\[SELECTING_APPOINTMENT_TIMES\]\|.+?(\n|$)/, 
+                  `[APPOINTMENT_OPTIONS]|${JSON.stringify(selectedSlots)}`
+                )
+              })
+              .eq('id', appointmentLead.id);
+            
+            // שלח ללקוח
+            let message = `שלום ${appointmentLead.customers.name}! 🎉\n\n`;
+            message += `${business.owner_name || 'בעל העסק'} מוכן לתאם פגישה.\n`;
+            message += `בחר/י את המועד המועדף:\n\n`;
+            
+            selectedSlots.forEach((slot, index) => {
+              const date = new Date(slot.date);
+              const dayName = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][date.getDay()];
+              const dateStr = date.toLocaleDateString('he-IL');
+              
+              message += `${index + 1}️⃣ *${dayName} ${dateStr}*\n`;
+              message += `   ⏰ ${slot.time}\n\n`;
+            });
+            
+            message += `השב/י עם המספר של המועד המועדף (1-${selectedSlots.length})`;
+            
+            await sendWhatsAppMessage(business, appointmentLead.customers.phone, message);
+            
+            // עדכן את הסטטוס של הלקוח
+            await supabase
+              .from('customers')
+              .update({ notes: `[WAITING_FOR_APPOINTMENT_CHOICE]|LEAD:${appointmentLead.id}` })
+              .eq('id', appointmentLead.customers.id);
+            
+            // הודע לבעל העסק
+            await sendWhatsAppMessage(business, normalizedOwner,
+              `✅ שלחתי ${selectedSlots.length} אופציות לתיאום פגישה ללקוח.\n\nאחכה לתשובתו ואעדכן אותך.`);
+            return;
+          } else {
+            await sendWhatsAppMessage(business, normalizedOwner,
+              '❌ אנא בחר 1-3 שעות מהרשימה.\nדוגמה: 1,3,5');
+            return;
+          }
+        }
+      }
+    }
+    
     // מצא את הפנייה האחרונה שממתינה לפעולה
     console.log('🔍 מחפש פנייה ממתינה לפעולה...');
     const { data: allPendingLeads } = await supabase
@@ -866,12 +1003,12 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
         .select('*, customers(*), quotes(*)')
         .eq('business_id', business.id)
         .order('created_at', { ascending: false });
-      
+        
       // סנן רק פניות עם הצעות שנשלחו או אושרו
       const readyLeads = leadsWithQuotes?.filter(lead => 
         lead.quotes?.some(quote => ['approved', 'sent'].includes(quote.status))
       ) || [];
-      
+        
       if (readyLeads && readyLeads.length > 0) {
         const lead = readyLeads[0];
         const customer = lead.customers;
@@ -1224,148 +1361,6 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
         return;
       }
     }
-    
-    
-    // בדוק אם בעל העסק בוחר יום לפגישה
-    const { data: selectingDayLead } = await supabase
-      .from('leads')
-      .select('*, customers(*)')
-      .eq('business_id', business.id)
-      .like('notes', '%[SELECTING_APPOINTMENT_DAY]%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    
-    if (selectingDayLead) {
-      console.log('🗓️ בעל העסק בוחר יום לפגישה');
-      const optionsMatch = selectingDayLead.notes.match(/\[SELECTING_APPOINTMENT_DAY\]\|(.+?)(\n|$)/);
-      if (optionsMatch) {
-        const daysOptions = JSON.parse(optionsMatch[1]);
-        const dayChoice = parseInt(messageText.trim());
-        
-        if (dayChoice > 0 && dayChoice <= daysOptions.length) {
-          const selectedDay = daysOptions[dayChoice - 1];
-          
-          // חשב שעות פנויות ביום שנבחר
-          const slots = await calculateDaySlots(
-            business.id, 
-            selectedDay.date, 
-            selectedDay.availability
-          );
-          
-          if (slots.length === 0) {
-            await sendWhatsAppMessage(business, normalizedOwner,
-              '❌ אין שעות פנויות ביום זה. בחר יום אחר.');
-            return;
-          }
-          
-          // הצג שעות לבחירה
-          let message = `📅 *${selectedDay.dayName} ${selectedDay.displayDate}*\n\n`;
-          message += '⏰ *בחר שעות לפגישה:*\n';
-          message += '(תוכל לבחור עד 3 אופציות)\n\n';
-          
-          slots.forEach((slot, index) => {
-            message += `${index + 1}. ${slot.time}\n`;
-          });
-          
-          message += '\n*דוגמה:* 1,3,5 (לבחירת שעות 1, 3 ו-5)\n';
-          message += 'או רק מספר אחד לאופציה בודדת';
-          
-          // עדכן את ה-notes
-          await supabase
-            .from('leads')
-            .update({ 
-              notes: selectingDayLead.notes.replace(
-                /\[SELECTING_APPOINTMENT_DAY\]\|.+?(\n|$)/, 
-                `[SELECTING_APPOINTMENT_TIMES]|${JSON.stringify({
-                  day: selectedDay,
-                  slots: slots
-                })}`
-              )
-            })
-            .eq('id', selectingDayLead.id);
-          
-          await sendWhatsAppMessage(business, normalizedOwner, message);
-        } else {
-          await sendWhatsAppMessage(business, normalizedOwner,
-            '❌ אנא בחר מספר תקין מהרשימה');
-        }
-      }
-      return;
-    }
-    
-    // בדוק אם בעל העסק בוחר שעות לפגישה
-    const { data: selectingTimesLead } = await supabase
-      .from('leads')
-      .select('*, customers(*)')
-      .eq('business_id', business.id)
-      .like('notes', '%[SELECTING_APPOINTMENT_TIMES]%')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    
-    if (selectingTimesLead) {
-      const optionsMatch = selectingTimesLead.notes.match(/\[SELECTING_APPOINTMENT_TIMES\]\|(.+?)(\n|$)/);
-      if (optionsMatch) {
-        const options = JSON.parse(optionsMatch[1]);
-        const selectedIndices = messageText.split(',').map(s => parseInt(s.trim()) - 1);
-        
-        // בדוק שכל האינדקסים תקינים
-        const validIndices = selectedIndices.filter(i => i >= 0 && i < options.slots.length);
-        
-        if (validIndices.length > 0 && validIndices.length <= 3) {
-          const selectedSlots = validIndices.map(i => ({
-            date: options.day.date,
-            time: options.slots[i].time,
-            duration: options.slots[i].duration
-          }));
-          
-          // שמור את האופציות שנבחרו
-          await supabase
-            .from('leads')
-            .update({ 
-              notes: selectingTimesLead.notes.replace(
-                /\[SELECTING_APPOINTMENT_TIMES\]\|.+?(\n|$)/, 
-                `[APPOINTMENT_OPTIONS]|${JSON.stringify(selectedSlots)}`
-              )
-            })
-            .eq('id', selectingTimesLead.id);
-          
-          // שלח ללקוח
-          let message = `שלום ${selectingTimesLead.customers.name}! 🎉\n\n`;
-          message += `${business.owner_name || 'בעל העסק'} מוכן לתאם פגישה.\n`;
-          message += `בחר/י את המועד המועדף:\n\n`;
-          
-          selectedSlots.forEach((slot, index) => {
-            const date = new Date(slot.date);
-            const dayName = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][date.getDay()];
-            const dateStr = date.toLocaleDateString('he-IL');
-            
-            message += `${index + 1}️⃣ *${dayName} ${dateStr}*\n`;
-            message += `   ⏰ ${slot.time}\n\n`;
-          });
-          
-          message += `השב/י עם המספר של המועד המועדף (1-${selectedSlots.length})`;
-          
-          await sendWhatsAppMessage(business, selectingTimesLead.customers.phone, message);
-          
-          // עדכן את הסטטוס של הלקוח
-          await supabase
-            .from('customers')
-            .update({ notes: `[WAITING_FOR_APPOINTMENT_CHOICE]|LEAD:${selectingTimesLead.id}` })
-            .eq('id', selectingTimesLead.customers.id);
-          
-          // הודע לבעל העסק
-          await sendWhatsAppMessage(business, normalizedOwner,
-            `✅ שלחתי ${selectedSlots.length} אופציות לתיאום פגישה ללקוח.\n\nאחכה לתשובתו ואעדכן אותך.`);
-        } else {
-          await sendWhatsAppMessage(business, normalizedOwner,
-            '❌ אנא בחר 1-3 שעות מהרשימה.\nדוגמה: 1,3,5');
-        }
-      }
-      return;
-    }
-    
     
     
     // בדוק אם זו תשובה מיוחדת
@@ -1812,22 +1807,22 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_RELATED_LEAD_ANSWER]
   return;
 }
 
-// בדיקה 6.5: האם הלקוח ממתין לשליחת כתובת מלאה אחרי אישור הצעה?
-if (customer.notes && customer.notes.includes('[WAITING_FOR_FULL_ADDRESS]')) {
-  console.log('📍 הלקוח שולח כתובת מלאה אחרי אישור הצעה');
+// בדיקה 6.5: האם הלקוח ממתין לשליחת כתובת מלאה לתיאום פגישה?
+if (customer.notes && customer.notes.includes('[WAITING_FOR_ADDRESS_FOR_APPOINTMENT]')) {
+  console.log('📍 הלקוח שולח כתובת מלאה לתיאום פגישה');
   
-  const quoteIdMatch = customer.notes.match(/QUOTE:([a-f0-9-]+)/);
-  const quoteId = quoteIdMatch ? quoteIdMatch[1] : null;
+  const leadIdMatch = customer.notes.match(/LEAD:([a-f0-9-]+)/);
+  const leadId = leadIdMatch ? leadIdMatch[1] : null;
   
-  if (quoteId) {
-    const { data: quote } = await supabase
-      .from('quotes')
-      .select('*, leads(*, businesses(*))')
-      .eq('id', quoteId)
+  if (leadId) {
+    const { data: lead } = await supabase
+      .from('leads')
+      .select('*, businesses(*)')
+      .eq('id', leadId)
       .single();
     
-    if (quote) {
-      const business = quote.leads.businesses;
+    if (lead) {
+      const business = lead.businesses;
       
       // עדכן את הכתובת המלאה
       await supabase
@@ -1838,37 +1833,12 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_FULL_ADDRESS]')) {
         })
         .eq('id', customer.id);
       
-      // שלח את הכתובת המלאה לבעל העסק
-      await sendWhatsAppMessage(business, normalizePhone(business.owner_phone),
-        `📍 *כתובת מלאה התקבלה!*\n\n` +
-        `👤 לקוח: ${customer.name}\n` +
-        `📱 טלפון: ${customer.phone}\n` +
-        `💰 הצעה מאושרת: ₪${quote.amount.toFixed(2)}\n\n` +
-        `📍 *כתובת מלאה:*\n${messageText.trim()}\n\n` +
-        `🗓️ *כעת תוכל לתאם פגישה עם הלקוח*\n` +
-        `השב עם המילה "פגישה" כדי להתחיל בתיאום`
-      );
-      
       await sendWhatsAppMessage(business, phoneNumber,
-        `מצוין! קיבלתי את הכתובת המלאה 📍\n\n` +
-        `בעל העסק יצור איתך קשר בקרוב לתיאום מועד הגעה.\n\n` +
-        `תודה על הסבלנות! 😊`
+        `תודה! קיבלתי את הכתובת 📍\n\nבעל העסק ממשיך בתיאום הפגישה...`
       );
       
-      // עדכן את ה-lead עם סימון שצריך לתאם פגישה וסטטוס approved
-      await supabase
-        .from('leads')
-        .update({ 
-          notes: (quote.leads.notes || '') + '\n[READY_FOR_APPOINTMENT]',
-          status: 'approved'
-        })
-        .eq('id', quote.leads.id);
-        
-      // עדכן גם את סטטוס ההצעה ל-approved
-      await supabase
-        .from('quotes')
-        .update({ status: 'approved' })
-        .eq('id', quoteId);
+      // המשך בתיאום פגישה
+      await startAppointmentScheduling(business, lead, customer, normalizePhone(business.owner_phone));
     }
   }
   return;
@@ -3822,22 +3792,13 @@ app.get('/approve-quote/:quoteId', async (req, res) => {
       `כדי לתאם פגישה, שלח "פגישה"`
     );
     
-    // בקש כתובת מלאה מהלקוח
+    // שלח אישור ללקוח
     await sendWhatsAppMessage(business, customer.phone,
       `תודה ${customer.name}! 🎉\n\n` +
       `ההצעה שלך אושרה בהצלחה.\n\n` +
-      `כדי לתאם את הגעת הטכנאי, אנא שלח/י לי כתובת מלאה:\n` +
-      `📍 רחוב ומספר בית\n` +
-      `🏢 קומה ודירה (אם רלוונטי)\n` +
-      `🔐 קוד כניסה לבניין (אם יש)\n\n` +
-      `דוגמה: רחוב הרצל 25, קומה 3 דירה 12, קוד כניסה 1234#`
+      `בעל העסק יצור איתך קשר בקרוב לתיאום מועד הגעה.\n\n` +
+      `תודה שבחרת ב-${business.business_name}! 🙏`
     );
-    
-    // עדכן את ה-notes של הלקוח לחכות לכתובת מלאה
-    await supabase
-      .from('customers')
-      .update({ notes: `[WAITING_FOR_FULL_ADDRESS]|QUOTE:${quote.id}` })
-      .eq('id', customer.id);
     
     res.send(`
       <!DOCTYPE html>
@@ -3986,6 +3947,35 @@ async function startAppointmentScheduling(business, lead, customer, ownerPhone) 
   try {
     console.log('🗓️ מתחיל תהליך תיאום פגישה');
     
+    // בדוק אם יש כתובת מלאה
+    if (!customer.full_address && (!customer.address || customer.address.length < 10)) {
+      console.log('📍 אין כתובת מלאה - מבקש מהלקוח');
+      
+      // בקש כתובת מלאה מהלקוח
+      await sendWhatsAppMessage(business, customer.phone,
+        `שלום ${customer.name}! 👋\n\n` +
+        `בעל העסק מעוניין לתאם איתך פגישה.\n\n` +
+        `כדי שנוכל להגיע אליך, אנא שלח/י כתובת מלאה:\n` +
+        `📍 רחוב ומספר בית\n` +
+        `🏢 קומה ודירה (אם רלוונטי)\n` +
+        `🔐 קוד כניסה לבניין (אם יש)\n\n` +
+        `דוגמה: רחוב הרצל 25, קומה 3 דירה 12, קוד כניסה 1234#`
+      );
+      
+      // עדכן את ה-notes של הלקוח
+      await supabase
+        .from('customers')
+        .update({ notes: `[WAITING_FOR_ADDRESS_FOR_APPOINTMENT]|LEAD:${lead.id}` })
+        .eq('id', customer.id);
+      
+      // הודע לבעל העסק
+      await sendWhatsAppMessage(business, ownerPhone,
+        `📍 ביקשתי מהלקוח כתובת מלאה לתיאום הפגישה.\n\nאחכה לתשובתו ואעדכן אותך.`
+      );
+      
+      return;
+    }
+    
     // שלוף את הזמינות של העסק
     const { data: availability } = await supabase
       .from('business_availability')
@@ -4003,7 +3993,7 @@ async function startAppointmentScheduling(business, lead, customer, ownerPhone) 
     // הצג ימים בשבוע הקרוב לבחירה
     let message = '🗓️ *תיאום פגישה*\n\n';
     message += `👤 לקוח: ${customer.name}\n`;
-    message += `📍 כתובת: ${customer.full_address || lead.customers.address}\n\n`;
+    message += `📍 כתובת: ${customer.full_address || customer.address}\n\n`;
     message += '📅 *בחר יום לפגישה:*\n\n';
     
     const daysOptions = [];

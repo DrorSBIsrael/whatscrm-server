@@ -594,7 +594,7 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
   if (normalizedIncoming === normalizedOwner) {
     console.log('👨‍💼 הודעה מבעל העסק!');
     
-    // ========================================
+// ========================================
 // 📵 בדיקה: האם זו הוספה לרשימה הלבנה?
 // ========================================
 // תבנית: "פרטי [שם]" או "פרטי: [שם]" או רק "פרטי"
@@ -672,57 +672,78 @@ if (privateMatch || messageText.trim().toLowerCase() === 'פרטי') {
       .from('leads')
       .select('*, customers(*)')
       .eq('business_id', business.id)
-      .or('notes.like.%[SELECTING_APPOINTMENT_DAY]%,notes.like.%[SELECTING_APPOINTMENT_TIMES]%')
+      .or('notes.like.%[SELECTING_APPOINTMENT_DAYS]%,notes.like.%[SELECTING_APPOINTMENT_TIMES_MULTI]%')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
     
     if (appointmentLead) {
-      // בדוק אם בוחר יום
-      if (appointmentLead.notes.includes('[SELECTING_APPOINTMENT_DAY]')) {
-        console.log('🗓️ בעל העסק בוחר יום לפגישה');
-        const optionsMatch = appointmentLead.notes.match(/\[SELECTING_APPOINTMENT_DAY\]\|(.+?)(\n|$)/);
+      // בדוק אם בוחר ימים
+      if (appointmentLead.notes.includes('[SELECTING_APPOINTMENT_DAYS]')) {
+        console.log('🗓️ בעל העסק בוחר ימים לפגישה');
+        const optionsMatch = appointmentLead.notes.match(/\[SELECTING_APPOINTMENT_DAYS\]\|(.+?)(\n|$)/);
         if (optionsMatch) {
           const daysOptions = JSON.parse(optionsMatch[1]);
-          const dayChoice = parseInt(messageText.trim());
+          const selectedIndices = messageText.split(',').map(s => parseInt(s.trim()) - 1);
           
-          if (dayChoice > 0 && dayChoice <= daysOptions.length) {
-            const selectedDay = daysOptions[dayChoice - 1];
+          // בדוק שכל האינדקסים תקינים
+          const validIndices = selectedIndices.filter(i => i >= 0 && i < daysOptions.length);
+          
+          if (validIndices.length > 0 && validIndices.length <= 3) {
+            const selectedDays = validIndices.map(i => daysOptions[i]);
             
-            // חשב שעות פנויות ביום שנבחר
-            const slots = await calculateDaySlots(
-              business.id, 
-              selectedDay.date, 
-              selectedDay.availability
-            );
+            // צור אובייקט לשמירת כל השעות הזמינות לכל יום
+            const allDaySlots = {};
             
-            if (slots.length === 0) {
+            // חשב שעות פנויות לכל יום שנבחר
+            for (const day of selectedDays) {
+              const slots = await calculateDaySlots(
+                business.id, 
+                day.date, 
+                day.availability
+              );
+              
+              if (slots.length > 0) {
+                allDaySlots[day.date] = {
+                  day: day,
+                  slots: slots
+                };
+              }
+            }
+            
+            if (Object.keys(allDaySlots).length === 0) {
               await sendWhatsAppMessage(business, normalizedOwner,
-                '❌ אין שעות פנויות ביום זה. בחר יום אחר.');
+                '❌ אין שעות פנויות בימים שנבחרו. בחר ימים אחרים.');
               return;
             }
             
-            // הצג שעות לבחירה
-            let message = `📅 *${selectedDay.dayName} ${selectedDay.displayDate}*\n\n`;
+            // התחל תהליך בחירת שעות - יום אחרי יום
+            const firstDayKey = Object.keys(allDaySlots)[0];
+            const firstDay = allDaySlots[firstDayKey];
+            
+            // הצג שעות לבחירה ליום הראשון
+            let message = `📅 *${firstDay.day.dayName} ${firstDay.day.displayDate}*\n\n`;
             message += '⏰ *בחר שעות לפגישה:*\n';
             message += '(תוכל לבחור עד 3 אופציות)\n\n';
             
-            slots.forEach((slot, index) => {
+            firstDay.slots.forEach((slot, index) => {
               message += `${index + 1}. ${slot.time}\n`;
             });
             
             message += '\n*דוגמה:* 1,3,5 (לבחירת שעות 1, 3 ו-5)\n';
-            message += 'או רק מספר אחד לאופציה בודדת';
+            message += 'או 0 כדי לדלג על יום זה';
             
             // עדכן את ה-notes
             await supabase
               .from('leads')
               .update({ 
                 notes: appointmentLead.notes.replace(
-                  /\[SELECTING_APPOINTMENT_DAY\]\|.+?(\n|$)/, 
-                  `[SELECTING_APPOINTMENT_TIMES]|${JSON.stringify({
-                    day: selectedDay,
-                    slots: slots
+                  /\[SELECTING_APPOINTMENT_DAYS\]\|.+?(\n|$)/, 
+                  `[SELECTING_APPOINTMENT_TIMES_MULTI]|${JSON.stringify({
+                    allDays: allDaySlots,
+                    currentDayIndex: 0,
+                    currentDayKey: firstDayKey,
+                    selectedSlots: []
                   })}`
                 )
               })
@@ -732,56 +753,111 @@ if (privateMatch || messageText.trim().toLowerCase() === 'פרטי') {
             return;
           } else {
             await sendWhatsAppMessage(business, normalizedOwner,
-              '❌ אנא בחר מספר תקין מהרשימה');
+              '❌ אנא בחר 1-3 ימים מהרשימה.\nדוגמה: 1,3,5');
             return;
           }
         }
       }
       
-      // בדוק אם בוחר שעות
-      if (appointmentLead.notes.includes('[SELECTING_APPOINTMENT_TIMES]')) {
-        console.log('⏰ בעל העסק בוחר שעות לפגישה');
-        const optionsMatch = appointmentLead.notes.match(/\[SELECTING_APPOINTMENT_TIMES\]\|(.+?)(\n|$)/);
+      // בדוק אם בוחר שעות (מרובות ימים)
+      if (appointmentLead.notes.includes('[SELECTING_APPOINTMENT_TIMES_MULTI]')) {
+        console.log('⏰ בעל העסק בוחר שעות לפגישה (מרובה ימים)');
+        const optionsMatch = appointmentLead.notes.match(/\[SELECTING_APPOINTMENT_TIMES_MULTI\]\|(.+?)(\n|$)/);
         if (optionsMatch) {
-          const options = JSON.parse(optionsMatch[1]);
-          const selectedIndices = messageText.split(',').map(s => parseInt(s.trim()) - 1);
+          const state = JSON.parse(optionsMatch[1]);
           
-          // בדוק שכל האינדקסים תקינים
-          const validIndices = selectedIndices.filter(i => i >= 0 && i < options.slots.length);
+          // אם המשתמש בחר 0, דלג על היום הנוכחי
+          if (messageText.trim() === '0') {
+            state.currentDayIndex++;
+          } else {
+            // אחרת, טפל בבחירת השעות
+            const selectedIndices = messageText.split(',').map(s => parseInt(s.trim()) - 1);
+            const currentDay = state.allDays[state.currentDayKey];
+            
+            // בדוק שכל האינדקסים תקינים
+            const validIndices = selectedIndices.filter(i => i >= 0 && i < currentDay.slots.length);
+            
+            if (validIndices.length > 0 && validIndices.length <= 3) {
+              // הוסף את השעות שנבחרו
+              validIndices.forEach(i => {
+                state.selectedSlots.push({
+                  date: currentDay.day.date,
+                  dayName: currentDay.day.dayName,
+                  displayDate: currentDay.day.displayDate,
+                  time: currentDay.slots[i].time,
+                  duration: currentDay.slots[i].duration
+                });
+              });
+              
+              state.currentDayIndex++;
+            } else {
+              await sendWhatsAppMessage(business, normalizedOwner,
+                '❌ אנא בחר 1-3 שעות מהרשימה, או 0 לדילוג.\nדוגמה: 1,3,5');
+              return;
+            }
+          }
           
-          if (validIndices.length > 0 && validIndices.length <= 3) {
-            const selectedSlots = validIndices.map(i => ({
-              date: options.day.date,
-              time: options.slots[i].time,
-              duration: options.slots[i].duration
-            }));
+          // בדוק אם יש עוד ימים לבחירה
+          const dayKeys = Object.keys(state.allDays);
+          if (state.currentDayIndex < dayKeys.length) {
+            // עבור ליום הבא
+            state.currentDayKey = dayKeys[state.currentDayIndex];
+            const nextDay = state.allDays[state.currentDayKey];
+            
+            let message = `📅 *${nextDay.day.dayName} ${nextDay.day.displayDate}*\n\n`;
+            message += '⏰ *בחר שעות לפגישה:*\n';
+            message += '(תוכל לבחור עד 3 אופציות)\n\n';
+            
+            nextDay.slots.forEach((slot, index) => {
+              message += `${index + 1}. ${slot.time}\n`;
+            });
+            
+            message += '\n*דוגמה:* 1,3,5 (לבחירת שעות 1, 3 ו-5)\n';
+            message += 'או 0 כדי לדלג על יום זה';
+            
+            // עדכן את ה-state
+            await supabase
+              .from('leads')
+              .update({ 
+                notes: appointmentLead.notes.replace(
+                  /\[SELECTING_APPOINTMENT_TIMES_MULTI\]\|.+?(\n|$)/, 
+                  `[SELECTING_APPOINTMENT_TIMES_MULTI]|${JSON.stringify(state)}`
+                )
+              })
+              .eq('id', appointmentLead.id);
+            
+            await sendWhatsAppMessage(business, normalizedOwner, message);
+            return;
+          } else {
+            // סיימנו לעבור על כל הימים
+            if (state.selectedSlots.length === 0) {
+              await sendWhatsAppMessage(business, normalizedOwner,
+                '❌ לא נבחרו שעות כלל. נסה שוב.');
+              return;
+            }
+            
+            // שלח את כל האופציות ללקוח
+            let message = `שלום ${appointmentLead.customers.name}! 🎉\n\n`;
+            message += `${business.owner_name || 'בעל העסק'} מוכן לתאם פגישה.\n`;
+            message += `בחר/י את המועד המועדף:\n\n`;
+            
+            state.selectedSlots.forEach((slot, index) => {
+              message += `${index + 1}️⃣ *${slot.dayName} ${slot.displayDate}*\n`;
+              message += `   ⏰ ${slot.time}\n\n`;
+            });
+            
+            message += `השב/י עם המספר של המועד המועדף (1-${state.selectedSlots.length})`;
             
             // שמור את האופציות שנבחרו
             await supabase
               .from('leads')
               .update({ 
                 notes: appointmentLead.notes.replace(
-                  /\[SELECTING_APPOINTMENT_TIMES\]\|.+?(\n|$)/, 
-                  `[APPOINTMENT_OPTIONS]|${JSON.stringify(selectedSlots)}`
+                  /\[SELECTING_APPOINTMENT_TIMES_MULTI\]\|.+?(\n|$)/, 
+                  `[APPOINTMENT_OPTIONS]|${JSON.stringify(state.selectedSlots)}`
                 )
               })
               .eq('id', appointmentLead.id);
-            
-            // שלח ללקוח
-            let message = `שלום ${appointmentLead.customers.name}! 🎉\n\n`;
-            message += `${business.owner_name || 'בעל העסק'} מוכן לתאם פגישה.\n`;
-            message += `בחר/י את המועד המועדף:\n\n`;
-            
-            selectedSlots.forEach((slot, index) => {
-              const date = new Date(slot.date);
-              const dayName = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][date.getDay()];
-              const dateStr = date.toLocaleDateString('he-IL');
-              
-              message += `${index + 1}️⃣ *${dayName} ${dateStr}*\n`;
-              message += `   ⏰ ${slot.time}\n\n`;
-            });
-            
-            message += `השב/י עם המספר של המועד המועדף (1-${selectedSlots.length})`;
             
             await sendWhatsAppMessage(business, appointmentLead.customers.phone, message);
             
@@ -793,11 +869,7 @@ if (privateMatch || messageText.trim().toLowerCase() === 'פרטי') {
             
             // הודע לבעל העסק
             await sendWhatsAppMessage(business, normalizedOwner,
-              `✅ שלחתי ${selectedSlots.length} אופציות לתיאום פגישה ללקוח.\n\nאחכה לתשובתו ואעדכן אותך.`);
-            return;
-          } else {
-            await sendWhatsAppMessage(business, normalizedOwner,
-              '❌ אנא בחר 1-3 שעות מהרשימה.\nדוגמה: 1,3,5');
+              `✅ שלחתי ${state.selectedSlots.length} אופציות לתיאום פגישה ללקוח.\n\nאחכה לתשובתו ואעדכן אותך.`);
             return;
           }
         }
@@ -4063,18 +4135,18 @@ async function startAppointmentScheduling(business, lead, customer, ownerPhone) 
       return;
     }
     
-    // הצג ימים בשבוע הקרוב לבחירה
+    // הצג ימים זמינים לבחירה
     let message = '🗓️ *תיאום פגישה*\n\n';
     message += `👤 לקוח: ${customer.name}\n`;
     message += `📍 כתובת: ${customer.full_address || customer.address}\n\n`;
-    message += '📅 *בחר יום לפגישה:*\n\n';
+    message += '📅 *בחר 1-3 תאריכים לפגישה:*\n\n';
     
     const daysOptions = [];
     const today = new Date();
     const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
     
-    // הצג 10 ימים קדימה
-    for (let i = 0; i < 10; i++) {
+    // הצג 14 ימים קדימה
+    for (let i = 0; i < 14; i++) {
       const date = new Date(today);
       date.setDate(today.getDate() + i);
       const dayOfWeek = date.getDay();
@@ -4093,23 +4165,24 @@ async function startAppointmentScheduling(business, lead, customer, ownerPhone) 
           availability: dayAvailability
         });
         
-        message += `${daysOptions.length}️⃣ ${dayName} ${displayDate}\n`;
+        message += `${daysOptions.length}. ${dayName} ${displayDate}\n`;
       }
     }
     
     if (daysOptions.length === 0) {
       await sendWhatsAppMessage(business, ownerPhone,
-        '❌ אין ימים זמינים בשבוע הקרוב על פי הגדרות הזמינות שלך.');
+        '❌ אין ימים זמינים בשבועיים הקרובים על פי הגדרות הזמינות שלך.');
       return;
     }
     
-    message += '\nהשב עם מספר היום הרצוי';
+    message += '\n*דוגמה:* 1,3,5 (לבחירת ימים 1, 3 ו-5)\n';
+    message += 'או רק מספר אחד לבחירת יום בודד';
     
     // שמור את האופציות
     await supabase
       .from('leads')
       .update({ 
-        notes: lead.notes + `\n[SELECTING_APPOINTMENT_DAY]|${JSON.stringify(daysOptions)}`
+        notes: lead.notes + `\n[SELECTING_APPOINTMENT_DAYS]|${JSON.stringify(daysOptions)}`
       })
       .eq('id', lead.id);
     
@@ -4141,38 +4214,42 @@ async function calculateDaySlots(businessId, dateStr, dayAvailability) {
   const startMinute = parseInt(dayAvailability.start_time.split(':')[1]);
   const endHour = parseInt(dayAvailability.end_time.split(':')[0]);
   const endMinute = parseInt(dayAvailability.end_time.split(':')[1]);
+  const slotDuration = dayAvailability.slot_duration || 60; // ברירת מחדל 60 דקות
   
-  for (let hour = startHour; hour < endHour; hour++) {
-    for (let minute = 0; minute < 60; minute += dayAvailability.slot_duration) {
-      // אם חורגים משעת הסיום
-      if (hour === endHour - 1 && minute + dayAvailability.slot_duration > endMinute) break;
+  // חישוב זמן התחלה וסיום בדקות
+  const startTotalMinutes = startHour * 60 + startMinute;
+  const endTotalMinutes = endHour * 60 + endMinute;
+  
+  for (let currentMinutes = startTotalMinutes; currentMinutes + slotDuration <= endTotalMinutes; currentMinutes += slotDuration) {
+    const hour = Math.floor(currentMinutes / 60);
+    const minute = currentMinutes % 60;
+    
+    const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+    
+    // בדוק אם הזמן תפוס
+    const isOccupied = existingAppointments?.some(apt => {
+      const aptTime = apt.appointment_time.substring(0, 5); // HH:MM
+      return aptTime === timeStr;
+    });
+    
+    if (!isOccupied) {
+      // בדוק שזה לא בעבר (אם זה היום)
+      const now = new Date();
+      const todayStr = now.toISOString().split('T')[0];
       
-      const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-      
-      // בדוק אם הזמן תפוס
-      const isOccupied = existingAppointments?.some(apt => 
-        apt.appointment_time === timeStr + ':00'
-      );
-      
-      if (!isOccupied) {
-        // בדוק שזה לא בעבר (אם זה היום)
-        const now = new Date();
-        const todayStr = now.toISOString().split('T')[0];
+      if (dateStr === todayStr) {
+        const currentHour = now.getHours();
+        const currentMinute = now.getMinutes();
         
-        if (dateStr === todayStr) {
-          const currentHour = now.getHours();
-          const currentMinute = now.getMinutes();
-          
-          if (hour < currentHour || (hour === currentHour && minute <= currentMinute)) {
-            continue; // דלג על זמנים שכבר עברו
-          }
+        if (hour < currentHour || (hour === currentHour && minute <= currentMinute)) {
+          continue; // דלג על זמנים שכבר עברו
         }
-        
-        slots.push({
-          time: timeStr,
-          duration: dayAvailability.slot_duration
-        });
       }
+      
+      slots.push({
+        time: timeStr,
+        duration: slotDuration
+      });
     }
   }
   

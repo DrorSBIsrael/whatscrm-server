@@ -2349,7 +2349,7 @@ if (nameMatch) {
       .update({ notes: '[WAITING_FOR_NAME]' })
       .eq('id', customer.id);
     
-    const response = 'שלום! אשמח לעזור לך 😊\nקודם כל, איך קוראים לך?';
+    const response = 'שלום! אני העוזר האישי של 😊\n ${business.owner_name ||} \n איך קוראים לך?';
     await sendWhatsAppMessage(business, phoneNumber, response);
     return;
   }

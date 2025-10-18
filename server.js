@@ -594,6 +594,79 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
   if (normalizedIncoming === normalizedOwner) {
     console.log('👨‍💼 הודעה מבעל העסק!');
     
+    // ========================================
+// 📵 בדיקה: האם זו הוספה לרשימה הלבנה?
+// ========================================
+// תבנית: "פרטי [שם]" או "פרטי: [שם]" או רק "פרטי"
+const privateRegex = /^פרטי[:\s]+(.+)/i;
+const privateMatch = messageText.match(privateRegex);
+
+if (privateMatch || messageText.trim().toLowerCase() === 'פרטי') {
+  console.log('📵 זוהתה בקשה להוספה לרשימה הלבנה');
+  
+  // חלץ את השם (אם קיים)
+  const contactName = privateMatch ? privateMatch[1].trim() : 'איש קשר פרטי';
+  
+  // מצא את הפנייה האחרונה (כדי לדעת עם מי בעל העסק מדבר)
+  const { data: latestLead } = await supabase
+    .from('leads')
+    .select('*, customers(*)')
+    .eq('business_id', business.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  
+  if (!latestLead || !latestLead.customers) {
+    await sendWhatsAppMessage(business, normalizedOwner, 
+      '❌ לא נמצא מספר לקוח להוספה.\nאנא ודא שיש פנייה אחרונה במערכת.');
+    return;
+  }
+  
+  const customerPhone = normalizePhone(latestLead.customers.phone);
+  
+  // בדוק אם המספר כבר ברשימה
+  const { data: existingEntry } = await supabase
+    .from('whitelist_phones')
+    .select('*')
+    .eq('business_id', business.id)
+    .eq('phone', customerPhone)
+    .maybeSingle();
+  
+  if (existingEntry) {
+    await sendWhatsAppMessage(business, normalizedOwner, 
+      `⚠️ המספר ${customerPhone} (${existingEntry.name}) כבר ברשימה הלבנה.`);
+    return;
+  }
+  
+  // הוסף לרשימה הלבנה
+  const { data: newEntry, error: insertError } = await supabase
+    .from('whitelist_phones')
+    .insert({
+      business_id: business.id,
+      phone: customerPhone,
+      name: contactName,
+      notes: `נוסף על ידי ${business.owner_name} בתאריך ${new Date().toLocaleDateString('he-IL')}`
+    })
+    .select()
+    .single();
+  
+  if (insertError) {
+    console.error('❌ שגיאה בהוספה לרשימה הלבנה:', insertError);
+    await sendWhatsAppMessage(business, normalizedOwner, 
+      `❌ שגיאה בהוספת המספר לרשימה הלבנה.\n${insertError.message}`);
+    return;
+  }
+  
+  // אישור הצלחה
+  await sendWhatsAppMessage(business, normalizedOwner, 
+    `✅ *נוסף לרשימה הלבנה*\n\n` +
+    `👤 שם: ${contactName}\n` +
+    `📱 מספר: ${customerPhone}\n\n` +
+    `📵 מעכשיו הבוט לא יענה אוטומטית לפניות ממספר זה.`);
+  
+  console.log(`✅ נוסף לרשימה הלבנה: ${contactName} - ${customerPhone}`);
+  return; // סיום - לא צריך להמשיך לטיפול
+}
     // בדוק קודם אם בעל העסק בתהליך תיאום פגישה
     const { data: appointmentLead } = await supabase
       .from('leads')

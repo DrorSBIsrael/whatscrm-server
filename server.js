@@ -383,9 +383,12 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     // שלוף מידע
     let phoneNumber;
+    let targetPhoneNumber = null; // מספר היעד (למי ההודעה נשלחה)
+    
     if (typeWebhook === 'outgoingMessageReceived') {
       // הודעה יוצאת - מבעל העסק
       phoneNumber = instanceData.wid.replace('@c.us', '');
+      targetPhoneNumber = senderData.chatId.replace('@c.us', ''); // המספר של הלקוח שאליו נשלחה ההודעה
     } else {
       // הודעה נכנסת - מלקוח
       phoneNumber = senderData.sender.replace('@c.us', '');

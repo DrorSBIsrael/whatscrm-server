@@ -381,18 +381,16 @@ app.post('/webhook/whatsapp', async (req, res) => {
       return res.status(200).send('OK - not a message');
     }
 
-// שלוף מידע
-let phoneNumber;
-let targetPhoneNumber = null; // מספר היעד (למי ההודעה נשלחה)
-
-if (typeWebhook === 'outgoingMessageReceived') {
-  // הודעה יוצאת - מבעל העסק
-  phoneNumber = instanceData.wid.replace('@c.us', '');
-  targetPhoneNumber = senderData.chatId.replace('@c.us', ''); // המספר של הלקוח שאליו נשלחה ההודעה
-} else {
-  // הודעה נכנסת - מלקוח
-  phoneNumber = senderData.sender.replace('@c.us', '');
-}
+    // שלוף מידע
+    let phoneNumber;
+    if (typeWebhook === 'outgoingMessageReceived') {
+      // הודעה יוצאת - מבעל העסק
+      phoneNumber = instanceData.wid.replace('@c.us', '');
+    } else {
+      // הודעה נכנסת - מלקוח
+      phoneNumber = senderData.sender.replace('@c.us', '');
+    }
+    const instanceId = instanceData.idInstance;
 
     // זיהוי סוג ההודעה
     let messageText = '';
@@ -436,7 +434,7 @@ if (typeWebhook === 'outgoingMessageReceived') {
     console.log(`✅ עסק נמצא: ${business.business_name}`);
 
     // טפל בהודעה
-    await handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType);
+    await handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType, targetPhoneNumber);
 
     res.status(200).send('OK');
 
@@ -467,8 +465,8 @@ async function findBusinessByInstance(instanceId) {
 // ========================================
 // 💬 טפל בהודעה נכנסת - משופר!
 // ========================================
-async function handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType, targetPhoneNumber = null) {
-    
+async function handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType) {
+  
   // ========================================
   // 🎯 בדיקה: האם המספר ברשימה הלבנה?
   // ========================================
@@ -609,53 +607,62 @@ if (privateMatch || messageText.trim().toLowerCase() === 'פרטי') {
   // חלץ את השם (אם קיים)
   const contactName = privateMatch ? privateMatch[1].trim() : 'איש קשר פרטי';
   
-// מצא את הלקוח לפי המספר של השיחה
-console.log('🔍 מחפש לקוח לפי מספר היעד...');
-let customerPhone = null;
-let customerData = null;
+  // מצא את הלקוח לפי המספר של השיחה
+  let customerPhone = null;
+  let customerData = null;
 
-if (targetPhoneNumber) {
-  // יש לנו מספר ספציפי - זה הלקוח שאליו בעל העסק עונה
-  console.log(`📱 מספר יעד: ${targetPhoneNumber}`);
-  customerPhone = normalizePhone(targetPhoneNumber);
-  
-  // מצא את הלקוח הזה במערכת
-  const { data: foundCustomer } = await supabase
-    .from('customers')
-    .select('*')
-    .eq('business_id', business.id)
-    .eq('phone', customerPhone)
-    .maybeSingle();
-  
-  customerData = foundCustomer;
-  console.log(`👤 לקוח נמצא: ${customerData ? customerData.name : 'לא נמצא'}`);
-} else {
-  // אין מספר ספציפי - חפש את הפנייה האחרונה
-  console.log('🔍 אין מספר יעד - מחפש פנייה אחרונה...');
-  const { data: latestLead } = await supabase
-    .from('leads')
-    .select('*, customers(*)')
-    .eq('business_id', business.id)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  
-  if (latestLead && latestLead.customers) {
+  if (targetPhoneNumber) {
+    // יש לנו מספר ספציפי - זה הלקוח שאליו בעל העסק עונה
+    console.log(`📱 מספר יעד מהשיחה: ${targetPhoneNumber}`);
+    customerPhone = normalizePhone(targetPhoneNumber);
+    
+    // מצא או צור את הלקוח הזה במערכת
+    const { data: foundCustomer } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('business_id', business.id)
+      .eq('phone', customerPhone)
+      .maybeSingle();
+    
+    if (foundCustomer) {
+      customerData = foundCustomer;
+      console.log(`👤 לקוח נמצא: ${customerData.name}`);
+    } else {
+      // אם הלקוח לא קיים, צור אותו
+      const { data: newCustomer } = await supabase
+        .from('customers')
+        .insert({
+          business_id: business.id,
+          phone: customerPhone,
+          name: contactName,
+          source: 'whatsapp'
+        })
+        .select()
+        .single();
+      
+      customerData = newCustomer;
+      console.log(`👤 נוצר לקוח חדש: ${contactName}`);
+    }
+  } else {
+    // אין מספר ספציפי - חפש את הפנייה האחרונה
+    console.log('🔍 אין מספר יעד - מחפש פנייה אחרונה...');
+    const { data: latestLead } = await supabase
+      .from('leads')
+      .select('*, customers(*)')
+      .eq('business_id', business.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (!latestLead || !latestLead.customers) {
+      await sendWhatsAppMessage(business, normalizedOwner, 
+        '❌ לא נמצא מספר לקוח להוספה.\nאנא ודא שאתה משיב להודעה של לקוח.');
+      return;
+    }
+    
     customerPhone = normalizePhone(latestLead.customers.phone);
     customerData = latestLead.customers;
-    console.log(`👤 לקוח מפנייה אחרונה: ${customerData.name}`);
   }
-}
-
-if (!customerData) {
-  console.log('⚠️ לא נמצא לקוח במערכת');
-  await sendWhatsAppMessage(business, normalizedOwner, 
-    '❌ לא נמצא לקוח בשיחה הזו.\n\nכדי להוסיף מספר לרשימה הלבנה, קודם צריכה להיות פנייה ממנו במערכת.');
-  return;
-}
-
-console.log(`📱 מספר לקוח: ${customerPhone}`);
-console.log(`👤 שם לקוח: ${customerData.name}`);
   
   // בדוק אם המספר כבר ברשימה
   const { data: existingEntry } = await supabase
@@ -691,13 +698,17 @@ console.log(`👤 שם לקוח: ${customerData.name}`);
   }
   
   // אישור הצלחה
+  const displayName = customerData && customerData.name && customerData.name !== contactName 
+    ? customerData.name 
+    : contactName;
+    
   await sendWhatsAppMessage(business, normalizedOwner, 
     `✅ *נוסף לרשימה הלבנה*\n\n` +
-    `👤 שם: ${contactName}\n` +
+    `👤 שם: ${displayName}\n` +
     `📱 מספר: ${customerPhone}\n\n` +
     `📵 מעכשיו הבוט לא יענה אוטומטית לפניות ממספר זה.`);
   
-  console.log(`✅ נוסף לרשימה הלבנה: ${contactName} - ${customerPhone}`);
+  console.log(`✅ נוסף לרשימה הלבנה: ${displayName} - ${customerPhone}`);
   return; // סיום - לא צריך להמשיך לטיפול
 }
     // בדוק קודם אם בעל העסק בתהליך תיאום פגישה

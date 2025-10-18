@@ -370,11 +370,27 @@ setInterval(cleanupExpiredMedia, 24 * 60 * 60 * 1000);
 // ========================================
 // 🎯 Webhook Endpoint - מקבל הודעות מ-Green API
 // ========================================
+// שמור הודעות שכבר טופלו
+const processedMessages = new Set();
+
 app.post('/webhook/whatsapp', async (req, res) => {
   try {
     console.log('📨 קיבלתי webhook:', JSON.stringify(req.body, null, 2));
 
-    const { typeWebhook, senderData, messageData, instanceData } = req.body;
+    const { typeWebhook, senderData, messageData, instanceData, idMessage } = req.body;
+    
+    // בדוק אם כבר טיפלנו בהודעה זו
+    if (idMessage && processedMessages.has(idMessage)) {
+      console.log('⏭️ הודעה כבר טופלה, מדלג...');
+      return res.status(200).send('OK - duplicate');
+    }
+    
+    // סמן שטיפלנו בהודעה
+    if (idMessage) {
+      processedMessages.add(idMessage);
+      // נקה הודעות ישנות אחרי דקה
+      setTimeout(() => processedMessages.delete(idMessage), 60000);
+    }
 
     // בדוק שזו הודעה נכנסת או יוצאת (מבעל העסק)
     if (typeWebhook !== 'incomingMessageReceived' && typeWebhook !== 'outgoingMessageReceived') {
@@ -443,6 +459,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     console.log(`✅ עסק נמצא: ${business.business_name}`);
 
     // טפל בהודעה
+    console.log(`📨 קורא ל-handleIncomingMessage עם targetPhoneNumber: ${targetPhoneNumber}`);
     await handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType, targetPhoneNumber);
 
     res.status(200).send('OK');
@@ -474,7 +491,8 @@ async function findBusinessByInstance(instanceId) {
 // ========================================
 // 💬 טפל בהודעה נכנסת - משופר!
 // ========================================
-async function handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType) {
+async function handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType, targetPhoneNumber = null) {
+  console.log(`🎯 handleIncomingMessage התחיל עם targetPhoneNumber: ${targetPhoneNumber}`);
   
   // ========================================
   // 🎯 בדיקה: האם המספר ברשימה הלבנה?

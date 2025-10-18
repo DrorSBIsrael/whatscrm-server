@@ -383,9 +383,12 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     // שלוף מידע
     let phoneNumber;
+    let targetPhoneNumber = null; // מספר היעד (למי ההודעה נשלחה)
+    
     if (typeWebhook === 'outgoingMessageReceived') {
       // הודעה יוצאת - מבעל העסק
       phoneNumber = instanceData.wid.replace('@c.us', '');
+      targetPhoneNumber = senderData.chatId.replace('@c.us', ''); // המספר של הלקוח שאליו נשלחה ההודעה
     } else {
       // הודעה נכנסת - מלקוח
       phoneNumber = senderData.sender.replace('@c.us', '');
@@ -434,7 +437,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     console.log(`✅ עסק נמצא: ${business.business_name}`);
 
     // טפל בהודעה
-    await handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType);
+    await handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType, targetPhoneNumber);
 
     res.status(200).send('OK');
 
@@ -607,22 +610,62 @@ if (privateMatch || messageText.trim().toLowerCase() === 'פרטי') {
   // חלץ את השם (אם קיים)
   const contactName = privateMatch ? privateMatch[1].trim() : 'איש קשר פרטי';
   
-  // מצא את הפנייה האחרונה (כדי לדעת עם מי בעל העסק מדבר)
-  const { data: latestLead } = await supabase
-    .from('leads')
-    .select('*, customers(*)')
-    .eq('business_id', business.id)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  
-  if (!latestLead || !latestLead.customers) {
-    await sendWhatsAppMessage(business, normalizedOwner, 
-      '❌ לא נמצא מספר לקוח להוספה.\nאנא ודא שיש פנייה אחרונה במערכת.');
-    return;
+  // מצא את הלקוח לפי המספר של השיחה
+  let customerPhone = null;
+  let customerData = null;
+
+  if (targetPhoneNumber) {
+    // יש לנו מספר ספציפי - זה הלקוח שאליו בעל העסק עונה
+    console.log(`📱 מספר יעד מהשיחה: ${targetPhoneNumber}`);
+    customerPhone = normalizePhone(targetPhoneNumber);
+    
+    // מצא או צור את הלקוח הזה במערכת
+    const { data: foundCustomer } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('business_id', business.id)
+      .eq('phone', customerPhone)
+      .maybeSingle();
+    
+    if (foundCustomer) {
+      customerData = foundCustomer;
+      console.log(`👤 לקוח נמצא: ${customerData.name}`);
+    } else {
+      // אם הלקוח לא קיים, צור אותו
+      const { data: newCustomer } = await supabase
+        .from('customers')
+        .insert({
+          business_id: business.id,
+          phone: customerPhone,
+          name: contactName,
+          source: 'whatsapp'
+        })
+        .select()
+        .single();
+      
+      customerData = newCustomer;
+      console.log(`👤 נוצר לקוח חדש: ${contactName}`);
+    }
+  } else {
+    // אין מספר ספציפי - חפש את הפנייה האחרונה
+    console.log('🔍 אין מספר יעד - מחפש פנייה אחרונה...');
+    const { data: latestLead } = await supabase
+      .from('leads')
+      .select('*, customers(*)')
+      .eq('business_id', business.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (!latestLead || !latestLead.customers) {
+      await sendWhatsAppMessage(business, normalizedOwner, 
+        '❌ לא נמצא מספר לקוח להוספה.\nאנא ודא שאתה משיב להודעה של לקוח.');
+      return;
+    }
+    
+    customerPhone = normalizePhone(latestLead.customers.phone);
+    customerData = latestLead.customers;
   }
-  
-  const customerPhone = normalizePhone(latestLead.customers.phone);
   
   // בדוק אם המספר כבר ברשימה
   const { data: existingEntry } = await supabase
@@ -658,13 +701,17 @@ if (privateMatch || messageText.trim().toLowerCase() === 'פרטי') {
   }
   
   // אישור הצלחה
+  const displayName = customerData && customerData.name && customerData.name !== contactName 
+    ? customerData.name 
+    : contactName;
+    
   await sendWhatsAppMessage(business, normalizedOwner, 
     `✅ *נוסף לרשימה הלבנה*\n\n` +
-    `👤 שם: ${contactName}\n` +
+    `👤 שם: ${displayName}\n` +
     `📱 מספר: ${customerPhone}\n\n` +
     `📵 מעכשיו הבוט לא יענה אוטומטית לפניות ממספר זה.`);
   
-  console.log(`✅ נוסף לרשימה הלבנה: ${contactName} - ${customerPhone}`);
+  console.log(`✅ נוסף לרשימה הלבנה: ${displayName} - ${customerPhone}`);
   return; // סיום - לא צריך להמשיך לטיפול
 }
     // בדוק קודם אם בעל העסק בתהליך תיאום פגישה
@@ -1996,7 +2043,7 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]'
   const leadIdMatch = customer.notes.match(/LEAD:([a-f0-9-]+)/);
   const leadId = leadIdMatch ? leadIdMatch[1] : null;
   
-  if (leadId && ['1', '2', '3'].includes(messageText.trim())) {
+  if (leadId && messageText.trim().match(/^[1-9]$/)) {
     const choiceIndex = parseInt(messageText.trim()) - 1;
     
     // שלוף את הפנייה עם האופציות
@@ -2010,9 +2057,9 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]'
       const optionsMatch = lead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
       if (optionsMatch) {
         const options = JSON.parse(optionsMatch[1]);
-        const selectedSlot = options[choiceIndex];
-        
-        if (selectedSlot) {
+        // בדוק שהאינדקס תקין
+        if (choiceIndex >= 0 && choiceIndex < options.length) {
+          const selectedSlot = options[choiceIndex];
           // צור פגישה חדשה
           const { data: appointment, error } = await supabase
             .from('appointments')
@@ -2073,12 +2120,16 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]'
             await sendWhatsAppMessage(lead.businesses, customer.phone,
               '❌ שגיאה בקביעת הפגישה. נסה שוב או צור קשר עם העסק.');
           }
+        } else {
+          // אופציה לא תקינה
+          await sendWhatsAppMessage(lead.businesses, customer.phone,
+            `❌ אופציה ${messageText} לא קיימת.\n\nאנא בחר מספר בין 1-${options.length}.`);
         }
       }
     }
   } else if (leadId) {
     await sendWhatsAppMessage(business, customer.phone,
-      '❌ אנא בחר מספר בין 1-3 למועד הרצוי.');
+      '❌ אנא בחר מספר תקין למועד הרצוי.');
   }
   
   return;
@@ -3825,6 +3876,57 @@ app.post('/api/approve-quote', async (req, res) => {
 app.get('/approve-quote/:quoteId', async (req, res) => {
   try {
     const { quoteId } = req.params;
+    
+    // בדוק קודם אם ההצעה כבר אושרה
+    const { data: existingQuote } = await supabase
+      .from('quotes')
+      .select('status')
+      .eq('id', quoteId)
+      .single();
+    
+    if (existingQuote && existingQuote.status === 'approved') {
+      // אם כבר אושרה, פשוט תציג הודעת אישור
+      return res.send(`
+        <!DOCTYPE html>
+        <html lang="he" dir="rtl">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>הצעה אושרה</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              height: 100vh;
+              margin: 0;
+              background-color: #f5f5f5;
+            }
+            .message {
+              text-align: center;
+              padding: 40px;
+              background: white;
+              border-radius: 10px;
+              box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+            .success-icon {
+              font-size: 60px;
+              color: #4CAF50;
+              margin-bottom: 20px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="message">
+            <div class="success-icon">✅</div>
+            <h1>ההצעה כבר אושרה!</h1>
+            <p>תודה על האישור. קיבלנו את הפרטים שלך.</p>
+          </div>
+        </body>
+        </html>
+      `);
+    }
     
     // Update quote status
     const { data: quote, error } = await supabase

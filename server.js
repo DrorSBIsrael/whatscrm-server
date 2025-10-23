@@ -2,12 +2,13 @@
 require('dotenv').config();
 
 // Imports - defined only once
-let express, createClient, axios, Anthropic, fs;
+let express, createClient, axios, Anthropic, fs, path;
 if (!express) express = require('express');
 if (!createClient) ({ createClient } = require('@supabase/supabase-js'));
 if (!axios) axios = require('axios');
 if (!Anthropic) Anthropic = require('@anthropic-ai/sdk');
 if (!fs) fs = require('fs');
+if (!path) path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -64,13 +65,6 @@ const PRIVATE_KEYWORDS = {
   ]
 };
 
-// ========================================
-// 🧠 Claude AI - ניתוח הודעה חכם
-// ========================================
-
-// ========================================
-// 📞 פונקציה לנרמול מספרי טלפון
-// ========================================
 // ========================================
 // 📞 פונקציה לנרמול מספרי טלפון
 // ========================================
@@ -1638,17 +1632,36 @@ if (privateMatch || messageText.trim().toLowerCase() === 'פרטי') {
         return;
       }
       
-      // אם יש כמה פניות - בקש לבחור
+      // אם יש כמה פניות - עבור אוטומטית לפי הסדר (הישנה ביותר קודם)
       if (readyLeads.length > 1) {
-        let message = '🗓️ *בחר פנייה לתיאום:*\n\n';
-        readyLeads.forEach(lead => {
-          const leadNumber = lead.notes?.match(/\d{4}/)?.[0] || lead.id.substring(0,8);
-          message += `📋 *פנייה #${leadNumber}*\n`;
-          message += `👤 ${lead.customers.name}\n`;
-          message += `📍 ${lead.customers.address}\n\n`;
-        });
-        message += 'השב עם מספר הפנייה';
-        await sendWhatsAppMessage(business, normalizedOwner, message);
+        console.log(`📋 נמצאו ${readyLeads.length} פניות מוכנות לתיאום - עובר לישנה ביותר`);
+        
+        // מיין לפי תאריך יצירה (הישנה ראשונה)
+        readyLeads.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+        
+        const lead = readyLeads[0];
+        const leadNumber = lead.notes?.match(/\d{4}/)?.[0] || lead.id.substring(0,8);
+        
+        await sendWhatsAppMessage(business, normalizedOwner,
+          `📋 *מתחיל תיאום פגישה לפנייה #${leadNumber}*\n\n` +
+          `👤 ${lead.customers.name}\n` +
+          `📍 ${lead.customers.address}\n\n` +
+          `➡️ יש עוד ${readyLeads.length - 1} פניות ממתינות שיטופלו לאחר מכן`);
+        
+        // סמן את הפנייה כנוכחית
+        await supabase
+          .from('businesses')
+          .update({ 
+            settings: {
+              ...business.settings,
+              current_scheduling_lead: lead.id,
+              pending_scheduling_leads: readyLeads.slice(1).map(l => l.id)
+            }
+          })
+          .eq('id', business.id);
+        
+        // התחל תיאום
+        await startAppointmentScheduling(business, lead, lead.customers, normalizedOwner);
         return;
       }
       
@@ -2165,6 +2178,61 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]'
                 notes: lead.notes.replace(/\[APPOINTMENT_OPTIONS\]\|.+?(\n|$)/, '[APPOINTMENT_SCHEDULED]')
               })
               .eq('id', leadId);
+            
+            // בדוק אם יש עוד פניות ממתינות לתיאום
+            const business = lead.businesses;
+            if (business.settings?.pending_scheduling_leads?.length > 0) {
+              const nextLeadId = business.settings.pending_scheduling_leads[0];
+              const remainingLeads = business.settings.pending_scheduling_leads.slice(1);
+              
+              // טען את הפנייה הבאה
+              const { data: nextLead } = await supabase
+                .from('leads')
+                .select('*, customers(*)')
+                .eq('id', nextLeadId)
+                .single();
+              
+              if (nextLead) {
+                // עדכן את הרשימה
+                await supabase
+                  .from('businesses')
+                  .update({
+                    settings: {
+                      ...business.settings,
+                      current_scheduling_lead: nextLeadId,
+                      pending_scheduling_leads: remainingLeads
+                    }
+                  })
+                  .eq('id', business.id);
+                
+                const nextLeadNumber = nextLead.notes?.match(/\d{4}/)?.[0] || nextLead.id.substring(0,8);
+                
+                // הודע לבעל העסק וממשיך לפנייה הבאה
+                await sendWhatsAppMessage(business, normalizePhone(business.owner_phone),
+                  `\n➡️ *עובר לפנייה הבאה #${nextLeadNumber}*\n\n` +
+                  `👤 ${nextLead.customers.name}\n` +
+                  `📍 ${nextLead.customers.address}\n\n` +
+                  `⏳ נותרו עוד ${remainingLeads.length} פניות לתיאום`
+                );
+                
+                // התחל תיאום לפנייה הבאה
+                setTimeout(async () => {
+                  await startAppointmentScheduling(business, nextLead, nextLead.customers, normalizePhone(business.owner_phone));
+                }, 2000); // המתן 2 שניות
+              }
+            } else {
+              // נקה את ההגדרות אם אין עוד פניות
+              await supabase
+                .from('businesses')
+                .update({
+                  settings: {
+                    ...business.settings,
+                    current_scheduling_lead: null,
+                    pending_scheduling_leads: []
+                  }
+                })
+                .eq('id', business.id);
+            }
           } else {
             await sendWhatsAppMessage(lead.businesses, customer.phone,
               '❌ שגיאה בקביעת הפגישה. נסה שוב או צור קשר עם העסק.');
@@ -2349,7 +2417,7 @@ if (nameMatch) {
       .update({ notes: '[WAITING_FOR_NAME]' })
       .eq('id', customer.id);
     
-    const response = 'שלום! אני עוזר האישי   😊\n איך קוראים לך?';
+    const response = 'שלום! אני עוזר אישי   😊\n מבקש לעקוב אחרי ההנחיות \n איך קוראים לך?';
     await sendWhatsAppMessage(business, phoneNumber, response);
     return;
   }
@@ -3625,6 +3693,117 @@ app.get('/ping', (req, res) => {
 });
 
 // ========================================
+// 📱 נתיב לשליחת הודעות WhatsApp
+// ========================================
+app.post('/send-message', async (req, res) => {
+  try {
+    const { businessId, customerPhone, message } = req.body;
+    
+    if (!businessId || !customerPhone || !message) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: businessId, customerPhone, message' 
+      });
+    }
+    
+    // מצא את העסק
+    const { data: business, error: businessError } = await supabase
+      .from('businesses')
+      .select('*')
+      .eq('id', businessId)
+      .single();
+      
+    if (businessError || !business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+    
+    // שלח את ההודעה
+    await sendWhatsAppMessage(business, normalizePhone(customerPhone), message);
+    
+    res.json({ success: true, message: 'Message sent successfully' });
+  } catch (error) {
+    console.error('Error in /send-message:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========================================
+// 📄 נתיב לשליחת הצעות מחיר
+// ========================================
+app.post('/send-quote', async (req, res) => {
+  try {
+    const { businessId, quoteId, customerPhone, customerName, quoteData, message } = req.body;
+    
+    if (!businessId || !customerPhone || !message) {
+      return res.status(400).json({ 
+        error: 'Missing required fields' 
+      });
+    }
+    
+    // מצא את העסק
+    const { data: business, error: businessError } = await supabase
+      .from('businesses')
+      .select('*')
+      .eq('id', businessId)
+      .single();
+      
+    if (businessError || !business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+    
+    // שמור את דף האישור של ההצעה
+    if (quoteId && quoteData) {
+      const htmlTemplate = fs.readFileSync('./quote-approval-template.html', 'utf8');
+      
+      // החלף משתנים בתבנית
+      let customHtml = htmlTemplate
+        .replace(/\{\{businessName\}\}/g, quoteData.businessName || business.name)
+        .replace(/\{\{quoteNumber\}\}/g, quoteData.quote_number || quoteId.slice(-6))
+        .replace(/\{\{customerName\}\}/g, customerName)
+        .replace(/\{\{customerPhone\}\}/g, customerPhone)
+        .replace(/\{\{customerAddress\}\}/g, quoteData.customer?.address || '')
+        .replace(/\{\{quoteDate\}\}/g, new Date(quoteData.created_at).toLocaleDateString('he-IL'))
+        .replace(/\{\{serviceDescription\}\}/g, quoteData.notes || '')
+        .replace(/\{\{totalAmount\}\}/g, (quoteData.amount || quoteData.total || 0).toFixed(2))
+        .replace(/\{\{quoteId\}\}/g, quoteId);
+      
+      // יצירת פריטי ההצעה
+      let itemsHtml = '';
+      if (quoteData.quote_items && quoteData.quote_items.length > 0) {
+        quoteData.quote_items.forEach(item => {
+          itemsHtml += `
+            <div class="item">
+              <div class="item-header">
+                <span class="item-name">${item.product_name}</span>
+                <span class="item-price">₪${item.total_price}</span>
+              </div>
+              <div class="item-quantity">כמות: ${item.quantity} | מחיר ליחידה: ₪${item.unit_price}</div>
+            </div>
+          `;
+        });
+      }
+      
+      customHtml = customHtml.replace('{{quoteItems}}', itemsHtml);
+      
+      // שמור את הקובץ
+      const quotesDir = './public/quotes';
+      if (!fs.existsSync(quotesDir)) {
+        fs.mkdirSync(quotesDir, { recursive: true });
+      }
+      
+      fs.writeFileSync(`${quotesDir}/quote-${quoteId}.html`, customHtml);
+    }
+    
+    // שלח את ההודעה
+    await sendWhatsAppMessage(business, normalizePhone(customerPhone), message);
+    
+    res.json({ success: true, message: 'Quote sent successfully' });
+  } catch (error) {
+    console.error('Error in /send-quote:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========================================
 // 🧹 ניקוי מדיה ידני
 // ========================================
 app.post('/cleanup-media', async (req, res) => {
@@ -3643,6 +3822,12 @@ app.use('/quote', express.static('public'));
 app.get('/quote/:quoteId', async (req, res) => {
   try {
     const { quoteId } = req.params;
+    
+    // תחילה בדוק אם יש קובץ HTML שמור להצעה הספציפית
+    const savedQuotePath = `./public/quotes/quote-${quoteId}.html`;
+    if (fs.existsSync(savedQuotePath)) {
+      return res.sendFile(path.resolve(savedQuotePath));
+    }
     
     // Get quote details
     const { data: quote, error } = await supabase
@@ -3922,6 +4107,24 @@ app.post('/api/approve-quote', async (req, res) => {
 // ========================================
 // ✅ Quote approval endpoint
 // ========================================
+app.get('/quote-approval/:quoteId', async (req, res) => {
+  try {
+    const { quoteId } = req.params;
+    
+    // בדוק אם יש קובץ HTML שמור
+    const savedQuotePath = `./public/quotes/quote-${quoteId}.html`;
+    if (fs.existsSync(savedQuotePath)) {
+      return res.sendFile(path.resolve(savedQuotePath));
+    }
+    
+    // אם לא, החזר לנתיב הרגיל
+    return res.redirect(`/quote/${quoteId}`);
+  } catch (error) {
+    console.error('Error in /quote-approval:', error);
+    res.status(500).send('שגיאה בטעינת הצעת המחיר');
+  }
+});
+
 app.get('/approve-quote/:quoteId', async (req, res) => {
   try {
     const { quoteId } = req.params;
@@ -4600,6 +4803,7 @@ app.listen(PORT, () => {
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
   console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });
+
 
 
 

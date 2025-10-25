@@ -2173,7 +2173,7 @@ if (customer && customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTM
               `📅 ${dayName}, ${dateStr}\n` +
               `⏰ ${selectedSlot.time}\n` +
               `📍 ${customer.full_address || lead.customers.address}\n\n` +
-              `נראה אותך! 😊`
+              `ניפגש ! 😊`
             );
             
             // עדכן את בעל העסק
@@ -2361,6 +2361,9 @@ if (customer && customer.notes && (customer.notes.includes('[WAITING_FOR_PHOTO]'
   // קיבלנו 4 תמונות או הלקוח אמר שאין עוד
   if (photoCount >= 4 || (messageText.toLowerCase() === 'לא' || messageText.toLowerCase() === 'אין')) {
     console.log(`✅ סיימנו לקבל תמונות - סה"כ ${photoCount} תמונות`);
+    
+    // חלץ את ה-Lead ID מה-notes
+    const tempLeadId = customer.notes?.match(/TEMP_LEAD:([a-f0-9-]+)/)?.[1];
     
     // נקה את הסימון
     await supabase
@@ -4857,4 +4860,7 @@ app.listen(PORT, () => {
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
   console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });
+
+
+
 

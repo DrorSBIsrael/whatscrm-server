@@ -452,6 +452,37 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     console.log(`✅ עסק נמצא: ${business.business_name}`);
 
+    // בדוק אם זו הודעת תיאום פגישה יוצאת מבעל העסק
+    if (typeWebhook === 'outgoingMessageReceived' && targetPhoneNumber && 
+        (messageText.includes('להזמנת פגישה') || messageText.includes('בחר') || 
+         messageText.includes('המועד המועדף') || messageText.includes('אלו התאריכים הפנויים'))) {
+      console.log('📅 זוהתה הודעת תיאום פגישה יוצאת מבעל העסק');
+      
+      // מצא את הלקוח
+      const targetCustomer = await findCustomer(business.id, targetPhoneNumber);
+      if (targetCustomer) {
+        // מצא את הפנייה האחרונה של הלקוח
+        const { data: recentLead } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('customer_id', targetCustomer.id)
+          .eq('business_id', business.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+          
+        if (recentLead) {
+          // עדכן את ה-notes של הלקוח שהוא ממתין לבחירת פגישה
+          await supabase
+            .from('customers')
+            .update({ notes: `[WAITING_FOR_APPOINTMENT_CHOICE]|LEAD:${recentLead.id}` })
+            .eq('id', targetCustomer.id);
+            
+          console.log('✅ עודכן סטטוס הלקוח להמתנה לבחירת פגישה');
+        }
+      }
+    }
+
     // טפל בהודעה
     console.log(`📨 קורא ל-handleIncomingMessage עם targetPhoneNumber: ${targetPhoneNumber}`);
     await handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType, targetPhoneNumber);

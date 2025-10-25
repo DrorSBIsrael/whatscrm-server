@@ -486,7 +486,11 @@ async function findBusinessByInstance(instanceId) {
 // 💬 טפל בהודעה נכנסת - משופר!
 // ========================================
 async function handleIncomingMessage(business, phoneNumber, messageText, mediaUrl, mediaType, targetPhoneNumber = null) {
-  console.log(`🎯 handleIncomingMessage התחיל עם targetPhoneNumber: ${targetPhoneNumber}`);
+  console.log(`🎯 handleIncomingMessage התחיל`);
+  console.log(`📱 Phone: ${phoneNumber}`);
+  console.log(`💬 Message: "${messageText}"`);
+  console.log(`🎯 Target: ${targetPhoneNumber}`);
+  console.log(`💼 Business: ${business.business_name}`);
   
   // ========================================
   // 🎯 בדיקה: האם המספר ברשימה הלבנה?
@@ -513,9 +517,13 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
   // 🔍 בדיקת פנייה פעילה ב-24 שעות האחרונות
   // ========================================
   let customer = await findCustomer(business.id, phoneNumber);
+  console.log(`👤 Customer found: ${customer ? customer.name : 'NO'}, Phone: ${phoneNumber}`);
   if (customer) {
-    // בדוק אם הלקוח בהתכתבות כללית עם בעל העסק (24 שעות)
-    if (customer.notes && customer.notes.includes('[GENERAL_CORRESPONDENCE_24H]')) {
+    console.log(`📝 Customer notes: "${customer.notes}"`);
+    
+  // בדוק אם הלקוח בהתכתבות כללית עם בעל העסק (24 שעות)
+  if (customer.notes && customer.notes.includes('[GENERAL_CORRESPONDENCE_24H]')) {
+    console.log('🔕 בבדיקת התכתבות כללית...');
       const untilMatch = customer.notes.match(/UNTIL:([^\]]+)/);
       if (untilMatch) {
         const untilDate = new Date(untilMatch[1]);
@@ -2062,7 +2070,7 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_RELATED_LEAD_ANSWER]
 }
 
 // בדיקה 6.5: האם הלקוח ממתין לשליחת כתובת מלאה לתיאום פגישה?
-if (customer.notes && customer.notes.includes('[WAITING_FOR_ADDRESS_FOR_APPOINTMENT]')) {
+if (customer && customer.notes && customer.notes.includes('[WAITING_FOR_ADDRESS_FOR_APPOINTMENT]')) {
   console.log('📍 הלקוח שולח כתובת מלאה לתיאום פגישה');
   
   const leadIdMatch = customer.notes.match(/LEAD:([a-f0-9-]+)/);
@@ -2095,18 +2103,23 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_ADDRESS_FOR_APPOINTM
       await startAppointmentScheduling(business, lead, customer, normalizePhone(business.owner_phone));
     }
   }
+  console.log('🔚 Returning after address handling');
   return;
 }
 
 // בדוק אם הלקוח בוחר מועד לפגישה
-if (customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]')) {
+if (customer && customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]')) {
   console.log('🗓️ הלקוח בוחר מועד פגישה');
+  console.log(`📝 Customer notes: ${customer.notes}`);
+  console.log(`💬 Message text: "${messageText}"`);
   
   const leadIdMatch = customer.notes.match(/LEAD:([a-f0-9-]+)/);
   const leadId = leadIdMatch ? leadIdMatch[1] : null;
+  console.log(`🔍 Lead ID found: ${leadId}`);
   
   if (leadId && messageText.trim().match(/^[1-9]$/)) {
     const choiceIndex = parseInt(messageText.trim()) - 1;
+    console.log(`✅ Valid choice detected: ${choiceIndex + 1}`);
     
     // שלוף את הפנייה עם האופציות
     const { data: lead } = await supabase
@@ -2116,12 +2129,16 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]'
       .single();
     
     if (lead && lead.notes.includes('[APPOINTMENT_OPTIONS]')) {
+      console.log(`📋 Lead notes: ${lead.notes}`);
       const optionsMatch = lead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
       if (optionsMatch) {
+        console.log(`🎯 Options match found: ${optionsMatch[1]}`);
         const options = JSON.parse(optionsMatch[1]);
+        console.log(`📅 Available options: ${options.length}`);
         // בדוק שהאינדקס תקין
         if (choiceIndex >= 0 && choiceIndex < options.length) {
           const selectedSlot = options[choiceIndex];
+          console.log(`✅ Selected slot:`, selectedSlot);
           // צור פגישה חדשה
           const { data: appointment, error } = await supabase
             .from('appointments')
@@ -2253,7 +2270,7 @@ if (customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]'
 }
 
 // בדיקה 7: אם זו תשובה לבקשת תמונות (תומך במספר תמונות)
-if (customer.notes && (customer.notes.includes('[WAITING_FOR_PHOTO]') || customer.notes.includes('[WAITING_FOR_PHOTOS]'))) {
+if (customer && customer.notes && (customer.notes.includes('[WAITING_FOR_PHOTO]') || customer.notes.includes('[WAITING_FOR_PHOTOS]'))) {
   console.log('📷 הלקוח באמצע תהליך - ממתין לתמונות');
   
   // טען מחדש את הלקוח כדי לקבל את ה-notes העדכני
@@ -2521,46 +2538,45 @@ if (lead) {
     if (mediaUrl && mediaType) {
       await saveMedia(lead.id, mediaUrl, mediaType, messageText);
     }
+    // בדוק כמה תמונות יש
+    console.log(`🔍 בודק מדיה עבור lead.id: ${lead.id}`);
+    console.log(`📋 מצב (notes): ${lead.notes || 'אין'}`);
+    const { data: allMedia, error: mediaError } = await supabase
+      .from('lead_media')
+      .select('*')
+      .eq('lead_id', lead.id);
+
+    if (mediaError) {
+      console.error(`❌ שגיאה בשליפת מדיה:`, mediaError);
+    }
+
+    const mediaCount = allMedia ? allMedia.length : 0;
+    console.log(`📸 סה"כ מדיה בפנייה: ${mediaCount} קבצים`);
+    if (allMedia && allMedia.length > 0) {
+      console.log(`📸 פירוט מדיה:`, allMedia.map(m => ({
+        type: m.media_type,
+        file: m.file_path,
+        caption: m.caption
+      })));
+    }
+
+    // סיכום ללקוח ושליחה לבעל העסק
+    const summaryMessage = `מצוין ${customer.name}! קיבלתי את כל הפרטים 📋\n\n✅ הבעיה: ${lead.service_description || messageText}\n✅ כתובת: ${customer.address}${customer.city ? `, ${customer.city}` : ''}\n${mediaCount > 0 ? `✅ ${mediaCount} תמונות/וידאו` : ''}\n\nאני מעביר את הפנייה שלך ל-${business.owner_name || 'בעל העסק'} להכנת הצעת מחיר.\n\nנחזור אליך בהקדם! 🚀`;
+
+    await sendWhatsAppMessage(business, phoneNumber, summaryMessage);
+
+    // נקה את notes של הלקוח מכל סימוני TEMP_LEAD
+    if (customer.notes && customer.notes.includes('TEMP_LEAD')) {
+      await supabase
+        .from('customers')
+        .update({ notes: '' })
+        .eq('id', customer.id);
+    }
+
+    // שלח ישר לבעל העסק
+    await sendCompleteSummaryToOwner(business, customer, lead);
+    return; // סיום הטיפול בפנייה חדשה
 }
-
-// בדוק כמה תמונות יש
-console.log(`🔍 בודק מדיה עבור lead.id: ${lead.id}`);
-console.log(`📋 מצב (notes): ${lead.notes || 'אין'}`);
-const { data: allMedia, error: mediaError } = await supabase
-  .from('lead_media')
-  .select('*')
-  .eq('lead_id', lead.id);
-
-if (mediaError) {
-  console.error(`❌ שגיאה בשליפת מדיה:`, mediaError);
-}
-
-const mediaCount = allMedia ? allMedia.length : 0;
-console.log(`📸 סה"כ מדיה בפנייה: ${mediaCount} קבצים`);
-if (allMedia && allMedia.length > 0) {
-  console.log(`📸 פירוט מדיה:`, allMedia.map(m => ({
-    type: m.media_type,
-    file: m.file_path,
-    caption: m.caption
-  })));
-}
-
-// סיכום ללקוח ושליחה לבעל העסק
-const summaryMessage = `מצוין ${customer.name}! קיבלתי את כל הפרטים 📋\n\n✅ הבעיה: ${lead.service_description || messageText}\n✅ כתובת: ${customer.address}${customer.city ? `, ${customer.city}` : ''}\n${mediaCount > 0 ? `✅ ${mediaCount} תמונות/וידאו` : ''}\n\nאני מעביר את הפנייה שלך ל-${business.owner_name || 'בעל העסק'} להכנת הצעת מחיר.\n\nנחזור אליך בהקדם! 🚀`;
-
-await sendWhatsAppMessage(business, phoneNumber, summaryMessage);
-
-// נקה את notes של הלקוח מכל סימוני TEMP_LEAD
-if (customer.notes && customer.notes.includes('TEMP_LEAD')) {
-  await supabase
-    .from('customers')
-    .update({ notes: '' })
-    .eq('id', customer.id);
-}
-
-// שלח ישר לבעל העסק
-await sendCompleteSummaryToOwner(business, customer, lead);
-return;
 
   // ========================================
   // ✅ פנייה קיימת - תהליך שלב-שלב
@@ -4691,7 +4707,7 @@ function scheduleDailyReminders() {
   // חשב כמה זמן עד 20:00
   const now = new Date();
   const tonight = new Date(now);
-  tonight.setHours(20, 0, 0, 0);
+  tonight.setHours(18, 0, 0, 0);
   
   // אם כבר עברנו את 20:00, קבע למחר
   if (now > tonight) {
@@ -4803,7 +4819,3 @@ app.listen(PORT, () => {
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
   console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });
-
-
-
-

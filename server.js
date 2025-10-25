@@ -528,8 +528,14 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
       if (untilMatch) {
         const untilDate = new Date(untilMatch[1]);
         if (new Date() < untilDate) {
-          console.log('🔕 לקוח בהתכתבות כללית - לא עונים אוטומטית');
-          return; // אל תענה כלל
+          // בדוק אם זו תשובה למספר (כנראה תשובה לשאלה)
+          if (messageText.trim().match(/^[1-9]$/)) {
+            console.log('🔢 זיהיתי תשובה מספרית - כנראה תשובה לשאלה, ממשיך לטפל...');
+            // לא מחזירים, ממשיכים לטפל בהודעה
+          } else {
+            console.log('🔕 לקוח בהתכתבות כללית - לא עונים אוטומטית');
+            return; // אל תענה כלל
+          }
         } else {
           // פג תוקף ה-24 שעות - נקה את הסימון
           await supabase
@@ -2363,6 +2369,30 @@ if (customer && customer.notes && (customer.notes.includes('[WAITING_FOR_PHOTO]'
         notes: ''
       })
       .eq('id', customer.id);
+    
+    // אם יש Lead זמני - עדכן אותו ושלח לבעל העסק
+    if (tempLeadId) {
+      const { data: lead } = await supabase
+        .from('leads')
+        .select('*, customers(*)')
+        .eq('id', tempLeadId)
+        .single();
+        
+      if (lead) {
+        // שלח אישור ללקוח
+        await sendWhatsAppMessage(business, phoneNumber,
+          `מצוין ${customer.name}! קיבלתי את כל הפרטים 📋\n\n` +
+          `✅ תיאור הבעיה\n` +
+          `✅ כתובת: ${customer.address}\n` +
+          `✅ ${photoCount} תמונות/סרטונים\n\n` +
+          `אני מעביר את הפנייה ל${business.owner_name || 'בעל העסק'} להכנת הצעת מחיר.\n\n` +
+          `נחזור אליך בהקדם! 🚀`);
+          
+        // שלח לבעל העסק
+        await sendCompleteSummaryToOwner(business, customer, lead);
+        return;
+      }
+    }
     
     // המשך ליצירת Lead עם כל הפרטים
     customer.notes = ''; // נקה כדי שלא יפריע בהמשך
@@ -4827,7 +4857,4 @@ app.listen(PORT, () => {
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
   console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });
-
-
-
 

@@ -4453,6 +4453,381 @@ app.get('/approve-quote/:quoteId', async (req, res) => {
 });
 
 // ========================================
+// 📅 Appointment selection endpoint
+// ========================================
+app.get('/appointment/:leadId', async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    
+    // Get lead and appointment options
+    const { data: lead, error } = await supabase
+      .from('leads')
+      .select(`
+        *,
+        customers!leads_customer_id_fkey (*),
+        businesses!leads_business_id_fkey (*)
+      `)
+      .eq('id', leadId)
+      .single();
+    
+    if (error || !lead) {
+      return res.status(404).send('פנייה לא נמצאה');
+    }
+    
+    // Extract appointment options from notes
+    const optionsMatch = lead.notes?.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
+    if (!optionsMatch) {
+      return res.status(404).send('אין אפשרויות פגישה זמינות');
+    }
+    
+    const appointmentOptions = JSON.parse(optionsMatch[1]);
+    const business = lead.businesses;
+    const customer = lead.customers;
+    
+    // Generate HTML for appointment selection
+    const html = `
+      <!DOCTYPE html>
+      <html lang="he" dir="rtl">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>בחירת מועד פגישה - ${business.business_name}</title>
+        <style>
+          * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+          }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            background-color: #f5f5f5;
+            line-height: 1.6;
+            color: #333;
+          }
+          .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+          }
+          .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px;
+            text-align: center;
+            color: white;
+            border-radius: 10px 10px 0 0;
+          }
+          .content {
+            background: white;
+            padding: 30px;
+            border-radius: 0 0 10px 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          }
+          h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+          }
+          .business-name {
+            font-size: 18px;
+            opacity: 0.9;
+          }
+          .appointment-option {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: white;
+          }
+          .appointment-option:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+            transform: translateY(-2px);
+          }
+          .appointment-option.selected {
+            border-color: #667eea;
+            background: #f8f9ff;
+          }
+          .day-name {
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+          }
+          .date {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 10px;
+          }
+          .time {
+            font-size: 18px;
+            color: #667eea;
+            font-weight: 500;
+          }
+          .confirm-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 18px;
+            border-radius: 50px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 20px;
+            transition: all 0.3s ease;
+            font-weight: bold;
+          }
+          .confirm-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
+          }
+          .confirm-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+          }
+          .info-section {
+            background: #f8f9ff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+          }
+          .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+          }
+          .info-label {
+            font-weight: bold;
+            color: #666;
+          }
+          .message {
+            text-align: center;
+            padding: 40px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          }
+          .success-icon {
+            font-size: 60px;
+            color: #4caf50;
+            margin-bottom: 20px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div id="selection-view">
+            <div class="header">
+              <h1>בחירת מועד פגישה</h1>
+              <div class="business-name">${business.business_name}</div>
+            </div>
+            <div class="content">
+              <div class="info-section">
+                <div class="info-row">
+                  <span class="info-label">שם:</span>
+                  <span>${customer.name}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">כתובת:</span>
+                  <span>${customer.address || 'יתואם'}</span>
+                </div>
+              </div>
+              
+              <h3 style="margin-bottom: 20px;">בחר מועד מועדף:</h3>
+              
+              <form id="appointment-form">
+                ${appointmentOptions.map((option, index) => `
+                  <div class="appointment-option" onclick="selectOption(${index})">
+                    <input type="radio" name="appointment" value="${index}" id="option-${index}" style="display: none;">
+                    <div class="day-name">${option.dayName}</div>
+                    <div class="date">${option.displayDate}</div>
+                    <div class="time">⏰ ${option.time}</div>
+                  </div>
+                `).join('')}
+                
+                <button type="submit" class="confirm-button" disabled>
+                  אשר מועד פגישה
+                </button>
+              </form>
+            </div>
+          </div>
+          
+          <div id="success-view" style="display: none;">
+            <div class="message">
+              <div class="success-icon">✓</div>
+              <h2>הפגישה נקבעה בהצלחה!</h2>
+              <p>קיבלת אישור ב-WhatsApp</p>
+              <p>נתראה במועד שנקבע 😊</p>
+            </div>
+          </div>
+        </div>
+        
+        <script>
+          let selectedOption = null;
+          
+          function selectOption(index) {
+            // Remove previous selection
+            document.querySelectorAll('.appointment-option').forEach(el => {
+              el.classList.remove('selected');
+            });
+            
+            // Add selection to clicked option
+            document.querySelectorAll('.appointment-option')[index].classList.add('selected');
+            document.getElementById('option-' + index).checked = true;
+            
+            selectedOption = index;
+            document.querySelector('.confirm-button').disabled = false;
+          }
+          
+          document.getElementById('appointment-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (selectedOption === null) return;
+            
+            try {
+              const response = await fetch('/confirm-appointment/${leadId}', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  selectedIndex: selectedOption
+                })
+              });
+              
+              if (response.ok) {
+                document.getElementById('selection-view').style.display = 'none';
+                document.getElementById('success-view').style.display = 'block';
+              } else {
+                alert('אירעה שגיאה בקביעת הפגישה. נסה שוב.');
+              }
+            } catch (error) {
+              alert('אירעה שגיאה בקביעת הפגישה. נסה שוב.');
+            }
+          });
+        </script>
+      </body>
+      </html>
+    `;
+    
+    res.send(html);
+    
+  } catch (error) {
+    console.error('Error in appointment selection:', error);
+    res.status(500).send('שגיאה בטעינת אפשרויות הפגישה');
+  }
+});
+
+// ========================================
+// ✅ Confirm appointment endpoint
+// ========================================
+app.post('/confirm-appointment/:leadId', async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    const { selectedIndex } = req.body;
+    
+    // Get lead details
+    const { data: lead, error } = await supabase
+      .from('leads')
+      .select(`
+        *,
+        customers!leads_customer_id_fkey (*),
+        businesses!leads_business_id_fkey (*)
+      `)
+      .eq('id', leadId)
+      .single();
+    
+    if (error || !lead) {
+      return res.status(404).json({ error: 'פנייה לא נמצאה' });
+    }
+    
+    // Extract appointment options
+    const optionsMatch = lead.notes?.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
+    if (!optionsMatch) {
+      return res.status(404).json({ error: 'אין אפשרויות פגישה' });
+    }
+    
+    const appointmentOptions = JSON.parse(optionsMatch[1]);
+    const selectedSlot = appointmentOptions[selectedIndex];
+    
+    if (!selectedSlot) {
+      return res.status(400).json({ error: 'אופציה לא תקינה' });
+    }
+    
+    const business = lead.businesses;
+    const customer = lead.customers;
+    
+    // Create appointment
+    const { data: appointment, error: appointmentError } = await supabase
+      .from('appointments')
+      .insert({
+        lead_id: leadId,
+        business_id: business.id,
+        customer_id: customer.id,
+        appointment_date: selectedSlot.date,
+        appointment_time: selectedSlot.time + ':00',
+        duration: selectedSlot.duration || 90,
+        status: 'confirmed',
+        location: customer.full_address || customer.address || 'יתואם',
+        notes: 'נקבעה דרך קישור אישור'
+      })
+      .select()
+      .single();
+    
+    if (appointmentError) {
+      console.error('Error creating appointment:', appointmentError);
+      return res.status(500).json({ error: 'שגיאה בקביעת הפגישה' });
+    }
+    
+    const date = new Date(selectedSlot.date);
+    const dayName = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][date.getDay()];
+    const dateStr = date.toLocaleDateString('he-IL');
+    
+    // Send confirmation to customer
+    await sendWhatsAppMessage(business, customer.phone,
+      `✅ *הפגישה נקבעה בהצלחה!*\n\n` +
+      `📅 ${dayName}, ${dateStr}\n` +
+      `⏰ ${selectedSlot.time}\n` +
+      `📍 ${customer.full_address || customer.address || 'יתואם'}\n\n` +
+      `ניפגש ! 😊`
+    );
+    
+    // Notify business owner
+    await sendWhatsAppMessage(business, normalizePhone(business.owner_phone),
+      `✅ *פגישה נקבעה!*\n\n` +
+      `👤 לקוח: ${customer.name}\n` +
+      `📱 טלפון: ${customer.phone}\n` +
+      `📅 ${dayName}, ${dateStr}\n` +
+      `⏰ ${selectedSlot.time}\n` +
+      `📍 ${customer.full_address || customer.address || 'יתואם'}\n\n` +
+      `💡 הלקוח אישר דרך הקישור`
+    );
+    
+    // Update lead status
+    await supabase
+      .from('leads')
+      .update({ 
+        status: 'scheduled',
+        notes: lead.notes.replace(/\[APPOINTMENT_OPTIONS\]\|.+?(\n|$)/, '[APPOINTMENT_SCHEDULED]')
+      })
+      .eq('id', leadId);
+    
+    // Clear customer notes
+    await supabase
+      .from('customers')
+      .update({ notes: '' })
+      .eq('id', customer.id);
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Error confirming appointment:', error);
+    res.status(500).json({ error: 'שגיאה בקביעת הפגישה' });
+  }
+});
+
+// ========================================
 // ❌ Quote rejection endpoint
 // ========================================
 app.get('/reject-quote/:quoteId', async (req, res) => {

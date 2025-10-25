@@ -2596,6 +2596,7 @@ if (lead) {
   await updateLeadDescription(lead.id, updatedDescription);
 
   // בדוק מה כבר יש ומה חסר
+  const hasDescription = lead.service_description && lead.service_description.trim().length > 0;
   const hasDetailedDescription = lead.service_description && lead.service_description.length > 50;
   
   const { data: existingMedia } = await supabase
@@ -2606,12 +2607,19 @@ if (lead) {
   
   const hasMedia = existingMedia && existingMedia.length > 0;
   
-  console.log(`📊 סטטוס: תיאור=${hasDetailedDescription}, כתובת=${!!customer.address}, מדיה=${hasMedia}, מדיה_חדשה=${!!mediaUrl}`);
+  console.log(`📊 סטטוס: תיאור=${hasDescription}, תיאור_מפורט=${hasDetailedDescription}, כתובת=${!!customer.address}, מדיה=${hasMedia}, מדיה_חדשה=${!!mediaUrl}`);
+
+  // אם יש תיאור בסיסי + מדיה, זה מספיק - אל תבקש עוד פרטים
+  if (hasDescription && hasMedia) {
+    console.log('✅ יש תיאור ומדיה - לא צריך לבקש עוד פרטים');
+    await sendCompleteSummaryToOwner(business, customer, lead);
+    return;
+  }
 
   // ========================================
-  // שלב 1: אין תיאור מפורט - בקש תיאור
+  // שלב 1: אין תיאור כלל - בקש תיאור
   // ========================================
-  if (!hasDetailedDescription && !mediaUrl) {
+  if (!hasDescription && !mediaUrl) {
     console.log('📝 שלב 1: מבקש תיאור מפורט...');
     
     const response = `תודה ${customer.name}! 
@@ -2692,7 +2700,7 @@ if (lead) {
   // ========================================
   // שלב 5: יש הכל - שלח לבעל העסק
   // ========================================
-  if (hasDetailedDescription && (hasMedia || mediaUrl)) {
+  if ((hasDescription || hasDetailedDescription) && (hasMedia || mediaUrl)) {
     console.log('📝 יש את כל הפרטים - שולח לבעל העסק...');
     
     const confirmationMessage = `${customer.name}, קיבלתי את כל הפרטים! 📋
@@ -4819,3 +4827,7 @@ app.listen(PORT, () => {
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
   console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });
+
+
+
+

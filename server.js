@@ -552,6 +552,172 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
   if (customer) {
     console.log(`📝 Customer notes: "${customer.notes}"`);
     
+    // בדיקה ראשונה: האם הלקוח מחכה לבחירת פגישה?
+    if (customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]')) {
+      console.log('🗓️ הלקוח בוחר מועד פגישה');
+      console.log(`💬 Message text: "${messageText}"`);
+      
+      const leadIdMatch = customer.notes.match(/LEAD:([a-f0-9-]+)/);
+      const leadId = leadIdMatch ? leadIdMatch[1] : null;
+      console.log(`🔍 Lead ID found: ${leadId}`);
+      
+      if (leadId && messageText.trim().match(/^[1-9]$/)) {
+        const choiceIndex = parseInt(messageText.trim()) - 1;
+        console.log(`✅ Valid choice detected: ${choiceIndex + 1}`);
+        
+        // שלוף את הפנייה עם האופציות
+        const { data: lead } = await supabase
+          .from('leads')
+          .select('*, businesses(*), customers(*)')
+          .eq('id', leadId)
+          .single();
+        
+        if (lead && lead.notes.includes('[APPOINTMENT_OPTIONS]')) {
+          console.log(`📋 Lead notes: ${lead.notes}`);
+          const optionsMatch = lead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
+          if (optionsMatch) {
+            console.log(`🎯 Options match found: ${optionsMatch[1]}`);
+            const options = JSON.parse(optionsMatch[1]);
+            console.log(`📅 Available options: ${options.length}`);
+            // בדוק שהאינדקס תקין
+            if (choiceIndex >= 0 && choiceIndex < options.length) {
+              const selectedSlot = options[choiceIndex];
+              console.log(`✅ Selected slot:`, selectedSlot);
+              // צור פגישה חדשה
+              const { data: appointment, error } = await supabase
+                .from('appointments')
+                .insert({
+                  lead_id: leadId,
+                  business_id: lead.business_id,
+                  customer_id: customer.id,
+                  appointment_date: selectedSlot.date,
+                  appointment_time: selectedSlot.time + ':00',
+                  duration: selectedSlot.duration,
+                  status: 'confirmed',
+                  location: customer.full_address || lead.customers.address,
+                  notes: `נקבעה על ידי הלקוח דרך וואטסאפ`
+                })
+                .select()
+                .single();
+              
+              if (!error && appointment) {
+                const date = new Date(selectedSlot.date);
+                const dayName = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][date.getDay()];
+                const dateStr = date.toLocaleDateString('he-IL');
+                
+                // בדוק אם הפגישות נשלחו מהאפליקציה
+                const isFromApp = customer.notes.includes('FROM_APP');
+                
+                // אשר ללקוח
+                await sendWhatsAppMessage(lead.businesses, customer.phone,
+                  `✅ *הפגישה נקבעה בהצלחה!*\n\n` +
+                  `📅 ${dayName}, ${dateStr}\n` +
+                  `⏰ ${selectedSlot.time}\n` +
+                  `📍 ${customer.full_address || lead.customers.address}\n\n` +
+                  `ניפגש בקרוב! 😊`
+                );
+                
+                // עדכן את בעל העסק
+                const confirmationSource = isFromApp ? 'הלקוח אישר דרך האפליקציה' : 'תזכורת תישלח ללקוח יום לפני הפגישה';
+                await sendWhatsAppMessage(lead.businesses, normalizePhone(lead.businesses.owner_phone),
+                  `✅ *פגישה נקבעה!*\n\n` +
+                  `👤 לקוח: ${customer.name}\n` +
+                  `📱 טלפון: ${customer.phone}\n` +
+                  `📅 ${dayName}, ${dateStr}\n` +
+                  `⏰ ${selectedSlot.time}\n` +
+                  `📍 ${customer.full_address || lead.customers.address}\n\n` +
+                  `💡 ${confirmationSource}`
+                );
+                
+                // נקה את ה-notes
+                await supabase
+                  .from('customers')
+                  .update({ notes: '' })
+                  .eq('id', customer.id);
+                
+                // עדכן את הפנייה
+                await supabase
+                  .from('leads')
+                  .update({ 
+                    status: 'scheduled',
+                    notes: lead.notes.replace(/\[APPOINTMENT_OPTIONS\]\|.+?(\n|$)/, '[APPOINTMENT_SCHEDULED]')
+                  })
+                  .eq('id', leadId);
+                
+                // בדוק אם יש עוד פניות ממתינות לתיאום
+                const business = lead.businesses;
+                if (business.settings?.pending_scheduling_leads?.length > 0) {
+                  const nextLeadId = business.settings.pending_scheduling_leads[0];
+                  const remainingLeads = business.settings.pending_scheduling_leads.slice(1);
+                  
+                  // טען את הפנייה הבאה
+                  const { data: nextLead } = await supabase
+                    .from('leads')
+                    .select('*, customers(*)')
+                    .eq('id', nextLeadId)
+                    .single();
+                  
+                  if (nextLead) {
+                    // עדכן את הרשימה
+                    await supabase
+                      .from('businesses')
+                      .update({
+                        settings: {
+                          ...business.settings,
+                          current_scheduling_lead: nextLeadId,
+                          pending_scheduling_leads: remainingLeads
+                        }
+                      })
+                      .eq('id', business.id);
+                    
+                    const nextLeadNumber = nextLead.notes?.match(/\d{4}/)?.[0] || nextLead.id.substring(0,8);
+                    
+                    // הודע לבעל העסק וממשיך לפנייה הבאה
+                    await sendWhatsAppMessage(business, normalizePhone(business.owner_phone),
+                      `\n➡️ *עובר לפנייה הבאה #${nextLeadNumber}*\n\n` +
+                      `👤 ${nextLead.customers.name}\n` +
+                      `📍 ${nextLead.customers.address}\n\n` +
+                      `⏳ נותרו עוד ${remainingLeads.length} פניות לתיאום`
+                    );
+                    
+                    // התחל תיאום לפנייה הבאה
+                    setTimeout(async () => {
+                      await startAppointmentScheduling(business, nextLead, nextLead.customers, normalizePhone(business.owner_phone));
+                    }, 2000); // המתן 2 שניות
+                  }
+                } else {
+                  // נקה את ההגדרות אם אין עוד פניות
+                  await supabase
+                    .from('businesses')
+                    .update({
+                      settings: {
+                        ...business.settings,
+                        current_scheduling_lead: null,
+                        pending_scheduling_leads: []
+                      }
+                    })
+                    .eq('id', business.id);
+                }
+              } else {
+                console.error('❌ Error creating appointment:', error);
+                await sendWhatsAppMessage(lead.businesses, customer.phone,
+                  '❌ שגיאה בקביעת הפגישה. נסה שוב או צור קשר עם העסק.');
+              }
+            } else {
+              // אופציה לא תקינה
+              await sendWhatsAppMessage(lead.businesses, customer.phone,
+                `❌ אופציה ${messageText} לא קיימת.\n\nאנא בחר מספר בין 1-${options.length}.`);
+            }
+          }
+        }
+        return; // סיים כאן - טיפלנו בבחירת הפגישה
+      } else if (leadId) {
+        await sendWhatsAppMessage(business, customer.phone,
+          '❌ אנא בחר מספר תקין למועד הרצוי.');
+        return;
+      }
+    }
+    
   // בדוק אם הלקוח בהתכתבות כללית עם בעל העסק (24 שעות)
   if (customer.notes && customer.notes.includes('[GENERAL_CORRESPONDENCE_24H]')) {
     console.log('🔕 בבדיקת התכתבות כללית...');
@@ -2144,167 +2310,7 @@ if (customer && customer.notes && customer.notes.includes('[WAITING_FOR_ADDRESS_
   return;
 }
 
-// בדוק אם הלקוח בוחר מועד לפגישה
-if (customer && customer.notes && customer.notes.includes('[WAITING_FOR_APPOINTMENT_CHOICE]')) {
-  console.log('🗓️ הלקוח בוחר מועד פגישה');
-  console.log(`📝 Customer notes: ${customer.notes}`);
-  console.log(`💬 Message text: "${messageText}"`);
-  
-  const leadIdMatch = customer.notes.match(/LEAD:([a-f0-9-]+)/);
-  const leadId = leadIdMatch ? leadIdMatch[1] : null;
-  console.log(`🔍 Lead ID found: ${leadId}`);
-  
-  if (leadId && messageText.trim().match(/^[1-9]$/)) {
-    const choiceIndex = parseInt(messageText.trim()) - 1;
-    console.log(`✅ Valid choice detected: ${choiceIndex + 1}`);
-    
-    // שלוף את הפנייה עם האופציות
-    const { data: lead } = await supabase
-      .from('leads')
-      .select('*, businesses(*), customers(*)')
-      .eq('id', leadId)
-      .single();
-    
-    if (lead && lead.notes.includes('[APPOINTMENT_OPTIONS]')) {
-      console.log(`📋 Lead notes: ${lead.notes}`);
-      const optionsMatch = lead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
-      if (optionsMatch) {
-        console.log(`🎯 Options match found: ${optionsMatch[1]}`);
-        const options = JSON.parse(optionsMatch[1]);
-        console.log(`📅 Available options: ${options.length}`);
-        // בדוק שהאינדקס תקין
-        if (choiceIndex >= 0 && choiceIndex < options.length) {
-          const selectedSlot = options[choiceIndex];
-          console.log(`✅ Selected slot:`, selectedSlot);
-          // צור פגישה חדשה
-          const { data: appointment, error } = await supabase
-            .from('appointments')
-            .insert({
-              lead_id: leadId,
-              business_id: lead.business_id,
-              customer_id: customer.id,
-              appointment_date: selectedSlot.date,
-              appointment_time: selectedSlot.time + ':00',
-              duration: selectedSlot.duration,
-              status: 'confirmed',
-              location: customer.full_address || lead.customers.address,
-              notes: `נקבעה על ידי הלקוח דרך וואטסאפ`
-            })
-            .select()
-            .single();
-          
-          if (!error && appointment) {
-            const date = new Date(selectedSlot.date);
-            const dayName = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][date.getDay()];
-            const dateStr = date.toLocaleDateString('he-IL');
-            
-            // אשר ללקוח
-            await sendWhatsAppMessage(lead.businesses, customer.phone,
-              `✅ *הפגישה נקבעה בהצלחה!*\n\n` +
-              `📅 ${dayName}, ${dateStr}\n` +
-              `⏰ ${selectedSlot.time}\n` +
-              `📍 ${customer.full_address || lead.customers.address}\n\n` +
-              `ניפגש ! 😊`
-            );
-            
-            // עדכן את בעל העסק
-            await sendWhatsAppMessage(lead.businesses, normalizePhone(lead.businesses.owner_phone),
-              `✅ *פגישה נקבעה!*\n\n` +
-              `👤 לקוח: ${customer.name}\n` +
-              `📱 טלפון: ${customer.phone}\n` +
-              `📅 ${dayName}, ${dateStr}\n` +
-              `⏰ ${selectedSlot.time}\n` +
-              `📍 ${customer.full_address || lead.customers.address}\n\n` +
-              `💡 תזכורת תישלח ללקוח יום לפני הפגישה.`
-            );
-            
-            // נקה את ה-notes
-            await supabase
-              .from('customers')
-              .update({ notes: '' })
-              .eq('id', customer.id);
-            
-            // עדכן את הפנייה
-            await supabase
-              .from('leads')
-              .update({ 
-                status: 'scheduled',
-                notes: lead.notes.replace(/\[APPOINTMENT_OPTIONS\]\|.+?(\n|$)/, '[APPOINTMENT_SCHEDULED]')
-              })
-              .eq('id', leadId);
-            
-            // בדוק אם יש עוד פניות ממתינות לתיאום
-            const business = lead.businesses;
-            if (business.settings?.pending_scheduling_leads?.length > 0) {
-              const nextLeadId = business.settings.pending_scheduling_leads[0];
-              const remainingLeads = business.settings.pending_scheduling_leads.slice(1);
-              
-              // טען את הפנייה הבאה
-              const { data: nextLead } = await supabase
-                .from('leads')
-                .select('*, customers(*)')
-                .eq('id', nextLeadId)
-                .single();
-              
-              if (nextLead) {
-                // עדכן את הרשימה
-                await supabase
-                  .from('businesses')
-                  .update({
-                    settings: {
-                      ...business.settings,
-                      current_scheduling_lead: nextLeadId,
-                      pending_scheduling_leads: remainingLeads
-                    }
-                  })
-                  .eq('id', business.id);
-                
-                const nextLeadNumber = nextLead.notes?.match(/\d{4}/)?.[0] || nextLead.id.substring(0,8);
-                
-                // הודע לבעל העסק וממשיך לפנייה הבאה
-                await sendWhatsAppMessage(business, normalizePhone(business.owner_phone),
-                  `\n➡️ *עובר לפנייה הבאה #${nextLeadNumber}*\n\n` +
-                  `👤 ${nextLead.customers.name}\n` +
-                  `📍 ${nextLead.customers.address}\n\n` +
-                  `⏳ נותרו עוד ${remainingLeads.length} פניות לתיאום`
-                );
-                
-                // התחל תיאום לפנייה הבאה
-                setTimeout(async () => {
-                  await startAppointmentScheduling(business, nextLead, nextLead.customers, normalizePhone(business.owner_phone));
-                }, 2000); // המתן 2 שניות
-              }
-            } else {
-              // נקה את ההגדרות אם אין עוד פניות
-              await supabase
-                .from('businesses')
-                .update({
-                  settings: {
-                    ...business.settings,
-                    current_scheduling_lead: null,
-                    pending_scheduling_leads: []
-                  }
-                })
-                .eq('id', business.id);
-            }
-          } else {
-            await sendWhatsAppMessage(lead.businesses, customer.phone,
-              '❌ שגיאה בקביעת הפגישה. נסה שוב או צור קשר עם העסק.');
-          }
-        } else {
-          // אופציה לא תקינה
-          await sendWhatsAppMessage(lead.businesses, customer.phone,
-            `❌ אופציה ${messageText} לא קיימת.\n\nאנא בחר מספר בין 1-${options.length}.`);
-        }
-      }
-    }
-  } else if (leadId) {
-    await sendWhatsAppMessage(business, customer.phone,
-      '❌ אנא בחר מספר תקין למועד הרצוי.');
-  }
-  
-  return;
-}
+// הקוד של בדיקת בחירת פגישה הועבר למעלה בתחילת הבדיקות
 
 // בדיקה 7: אם זו תשובה לבקשת תמונות (תומך במספר תמונות)
 if (customer && customer.notes && (customer.notes.includes('[WAITING_FOR_PHOTO]') || customer.notes.includes('[WAITING_FOR_PHOTOS]'))) {
@@ -4716,6 +4722,46 @@ app.get('/appointment/:leadId', async (req, res) => {
   } catch (error) {
     console.error('Error in appointment selection:', error);
     res.status(500).send('שגיאה בטעינת אפשרויות הפגישה');
+  }
+});
+
+// ========================================
+// 📅 Mark customer waiting for appointment choice
+// ========================================
+app.post('/api/mark-appointment-sent', async (req, res) => {
+  try {
+    const { customerId, leadId, appointmentOptions } = req.body;
+    
+    if (!customerId || !leadId || !appointmentOptions) {
+      return res.status(400).json({ error: 'חסרים פרטים נדרשים' });
+    }
+    
+    // עדכן את ה-notes של הלקוח
+    await supabase
+      .from('customers')
+      .update({ 
+        notes: `[WAITING_FOR_APPOINTMENT_CHOICE]|LEAD:${leadId}|FROM_APP` 
+      })
+      .eq('id', customerId);
+    
+    // עדכן את ה-notes של הפנייה עם האופציות
+    const { data: lead } = await supabase
+      .from('leads')
+      .select('notes')
+      .eq('id', leadId)
+      .single();
+    
+    const updatedNotes = (lead?.notes || '') + '\n[APPOINTMENT_OPTIONS]|' + JSON.stringify(appointmentOptions);
+    
+    await supabase
+      .from('leads')
+      .update({ notes: updatedNotes })
+      .eq('id', leadId);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error marking appointment sent:', error);
+    res.status(500).json({ error: 'שגיאה בסימון שליחת פגישה' });
   }
 });
 

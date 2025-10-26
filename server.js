@@ -3916,6 +3916,7 @@ app.use('/quote', express.static('public'));
 app.get('/quote/:quoteId', async (req, res) => {
   try {
     const { quoteId } = req.params;
+    const { discount } = req.query; // Get discount from URL parameter
     
     // תחילה בדוק אם יש קובץ HTML שמור להצעה הספציפית
     const savedQuotePath = `./public/quotes/quote-${quoteId}.html`;
@@ -4093,8 +4094,13 @@ app.get('/quote/:quoteId', async (req, res) => {
       `;
     });
     
-    // Calculate total
-    const totalAmount = quote.quote_items.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
+    // Calculate subtotal
+    const subtotal = quote.quote_items.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0);
+    
+    // Apply discount if provided in URL or quote
+    const discountPercentage = parseFloat(discount) || quote.discount || 0;
+    const discountAmount = subtotal * (discountPercentage / 100);
+    const totalAmount = subtotal - discountAmount;
     
     // Replace placeholders
     template = template.replace(/{{businessName}}/g, quote.leads.businesses.business_name || 'העסק שלנו');
@@ -4105,6 +4111,23 @@ app.get('/quote/:quoteId', async (req, res) => {
     template = template.replace(/{{quoteDate}}/g, new Date(quote.created_at).toLocaleDateString('he-IL'));
     template = template.replace(/{{serviceDescription}}/g, quote.leads.service_description);
     template = template.replace(/{{quoteItems}}/g, itemsHtml);
+    
+    // Add discount info if exists
+    if (discountPercentage > 0) {
+      const discountHtml = `
+        <div class="info-row">
+          <span class="info-label">סכום לפני הנחה:</span>
+          <span>₪${subtotal.toFixed(2)}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">הנחה (${discountPercentage}%):</span>
+          <span>-₪${discountAmount.toFixed(2)}</span>
+        </div>
+      `;
+      // Insert discount info before the total section
+      template = template.replace('<!-- סה"כ -->', `<!-- הנחה -->\n${discountHtml}\n<!-- סה"כ -->`);
+    }
+    
     template = template.replace(/{{totalAmount}}/g, totalAmount.toFixed(2));
     template = template.replace(/{{quoteId}}/g, quoteId);
     

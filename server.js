@@ -572,17 +572,20 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
           .eq('id', leadId)
           .single();
         
-        if (lead && lead.notes.includes('[APPOINTMENT_OPTIONS]')) {
-          console.log(`📋 Lead notes: ${lead.notes}`);
-          const optionsMatch = lead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
-          if (optionsMatch) {
-            console.log(`🎯 Options match found: ${optionsMatch[1]}`);
-            const options = JSON.parse(optionsMatch[1]);
-            console.log(`📅 Available options: ${options.length}`);
-            // בדוק שהאינדקס תקין
-            if (choiceIndex >= 0 && choiceIndex < options.length) {
-              const selectedSlot = options[choiceIndex];
-              console.log(`✅ Selected slot:`, selectedSlot);
+        if (lead) {
+          console.log(`📋 Lead found, checking notes...`);
+          console.log(`📋 Lead notes: ${lead.notes || 'NO NOTES'}`);
+          
+          if (lead.notes && lead.notes.includes('[APPOINTMENT_OPTIONS]')) {
+            const optionsMatch = lead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
+            if (optionsMatch) {
+              console.log(`🎯 Options match found: ${optionsMatch[1]}`);
+              const options = JSON.parse(optionsMatch[1]);
+              console.log(`📅 Available options: ${options.length}`);
+              // בדוק שהאינדקס תקין
+              if (choiceIndex >= 0 && choiceIndex < options.length) {
+                const selectedSlot = options[choiceIndex];
+                console.log(`✅ Selected slot:`, selectedSlot);
               // צור פגישה חדשה
               const { data: appointment, error } = await supabase
                 .from('appointments')
@@ -705,13 +708,21 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
               }
             } else {
               // אופציה לא תקינה
+              console.log(`❌ Invalid choice index: ${choiceIndex}, options length: ${options.length}`);
               await sendWhatsAppMessage(lead.businesses, customer.phone,
                 `❌ אופציה ${messageText} לא קיימת.\n\nאנא בחר מספר בין 1-${options.length}.`);
             }
+          } else {
+            console.log('❌ No options match found in notes');
           }
+        } else {
+          console.log('❌ Lead does not contain [APPOINTMENT_OPTIONS] in notes');
         }
-        return; // סיים כאן - טיפלנו בבחירת הפגישה
-      } else if (leadId) {
+      } else {
+        console.log('❌ Lead not found with id:', leadId);
+      }
+      return; // סיים כאן - טיפלנו בבחירת הפגישה
+    } else if (leadId) {
         await sendWhatsAppMessage(business, customer.phone,
           '❌ אנא בחר מספר תקין למועד הרצוי.');
         return;

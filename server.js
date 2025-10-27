@@ -4411,12 +4411,15 @@ app.get('/approve-quote/:quoteId', async (req, res) => {
             `).join('')}
           </div>
           
-          ${quote.discount && quote.discount > 0 ? `
-          <div class="discount-section" style="margin: 20px 0; padding: 10px; background: #f5f5f5;">
-            <p>סכום לפני הנחה: ₪${(quote.subtotal || 0).toFixed(2)}</p>
-            <p>הנחה (${quote.discount}%): -₪${((quote.subtotal * quote.discount / 100) || 0).toFixed(2)}</p>
-          </div>
-          ` : ''}
+          ${(() => {
+            console.log('Quote data:', { discount: quote.discount, subtotal: quote.subtotal, amount: quote.amount });
+            return quote.discount && quote.discount > 0 ? `
+            <div class="discount-section" style="margin: 20px 0; padding: 10px; background: #f5f5f5;">
+              <p>סכום לפני הנחה: ₪${(quote.subtotal || 0).toFixed(2)}</p>
+              <p>הנחה (${quote.discount}%): -₪${((quote.subtotal * quote.discount / 100) || 0).toFixed(2)}</p>
+            </div>
+            ` : '';
+          })()}
           
           <div class="total">
             סה"כ לתשלום: ₪${quote.amount.toFixed(2)}

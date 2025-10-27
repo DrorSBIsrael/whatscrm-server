@@ -4822,6 +4822,8 @@ app.post('/api/mark-appointment-sent', async (req, res) => {
   try {
     const { customerId, leadId, appointmentOptions } = req.body;
     
+    console.log('📅 mark-appointment-sent called:', { customerId, leadId, appointmentOptions });
+    
     if (!customerId || !leadId || !appointmentOptions) {
       return res.status(400).json({ error: 'חסרים פרטים נדרשים' });
     }
@@ -4859,7 +4861,9 @@ app.post('/api/mark-appointment-sent', async (req, res) => {
     
     const updatedNotes = cleanedNotes + '\n[APPOINTMENT_OPTIONS]|' + JSON.stringify(formattedOptions);
     
-    await supabase
+    console.log('📝 Updating lead notes with:', updatedNotes);
+    
+    const { error: updateError } = await supabase
       .from('leads')
       .update({ 
         notes: updatedNotes,
@@ -4867,6 +4871,12 @@ app.post('/api/mark-appointment-sent', async (req, res) => {
       })
       .eq('id', leadId);
     
+    if (updateError) {
+      console.error('❌ Error updating lead:', updateError);
+      throw updateError;
+    }
+    
+    console.log('✅ Lead updated successfully');
     res.json({ success: true });
   } catch (error) {
     console.error('Error marking appointment sent:', error);

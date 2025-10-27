@@ -3878,6 +3878,22 @@ app.post('/send-quote', async (req, res) => {
       
       customHtml = customHtml.replace('{{quoteItems}}', itemsHtml);
       
+      // הוסף הנחה אם קיימת
+      if (quoteData.discount && quoteData.discount > 0) {
+        const discountHtml = `
+          <div class="info-row">
+            <span class="info-label">סכום לפני הנחה:</span>
+            <span>₪${(quoteData.subtotal || 0).toFixed(2)}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">הנחה (${quoteData.discount}%):</span>
+            <span>-₪${((quoteData.subtotal * quoteData.discount / 100) || 0).toFixed(2)}</span>
+          </div>
+        `;
+        // הכנס את ההנחה לפני הסכום הכולל
+        customHtml = customHtml.replace('<!-- סה"כ -->', `<!-- הנחה -->\n${discountHtml}\n<!-- סה"כ -->`);
+      }
+      
       // שמור את הקובץ
       const quotesDir = './public/quotes';
       if (!fs.existsSync(quotesDir)) {
@@ -3921,6 +3937,36 @@ app.get('/quote/:quoteId', async (req, res) => {
     // תחילה בדוק אם יש קובץ HTML שמור להצעה הספציפית
     const savedQuotePath = `./public/quotes/quote-${quoteId}.html`;
     if (fs.existsSync(savedQuotePath)) {
+      // אם יש הנחה בפרמטרים, עדכן את הקובץ
+      if (discount) {
+        let savedHtml = fs.readFileSync(savedQuotePath, 'utf8');
+        
+        // מצא את הסכום הכולל המקורי
+        const totalMatch = savedHtml.match(/₪([\d,]+\.?\d*)<\/div>\s*<\/div>\s*<!-- חתימה -->/);
+        if (totalMatch) {
+          const originalTotal = parseFloat(totalMatch[1].replace(/,/g, ''));
+          const discountPercentage = parseFloat(discount);
+          const subtotal = originalTotal / (1 - discountPercentage / 100);
+          const discountAmount = subtotal * (discountPercentage / 100);
+          
+          // הוסף את ההנחה לפני הסכום הכולל
+          const discountHtml = `
+            <div class="info-row">
+              <span class="info-label">סכום לפני הנחה:</span>
+              <span>₪${subtotal.toFixed(2)}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">הנחה (${discountPercentage}%):</span>
+              <span>-₪${discountAmount.toFixed(2)}</span>
+            </div>
+          `;
+          
+          // הכנס את ההנחה לפני הסכום הכולל
+          savedHtml = savedHtml.replace('<!-- סה"כ -->', `<!-- הנחה -->\n${discountHtml}\n<!-- סה"כ -->`);
+        }
+        
+        return res.send(savedHtml);
+      }
       return res.sendFile(path.resolve(savedQuotePath));
     }
     
@@ -4364,6 +4410,13 @@ app.get('/approve-quote/:quoteId', async (req, res) => {
               </div>
             `).join('')}
           </div>
+          
+          ${quote.discount && quote.discount > 0 ? `
+          <div class="discount-section" style="margin: 20px 0; padding: 10px; background: #f5f5f5;">
+            <p>סכום לפני הנחה: ₪${(quote.subtotal || 0).toFixed(2)}</p>
+            <p>הנחה (${quote.discount}%): -₪${((quote.subtotal * quote.discount / 100) || 0).toFixed(2)}</p>
+          </div>
+          ` : ''}
           
           <div class="total">
             סה"כ לתשלום: ₪${quote.amount.toFixed(2)}

@@ -4844,12 +4844,27 @@ app.post('/api/mark-appointment-sent', async (req, res) => {
     // נקה סטטוסים ישנים ממערכת אחרת
     let cleanedNotes = (lead?.notes || '').replace(/\[SELECTING_APPOINTMENT_DAYS\]\|.+?(\n|$)/g, '');
     cleanedNotes = cleanedNotes.replace(/\[SELECTING_APPOINTMENT_TIMES_MULTI\]\|.+?(\n|$)/g, '');
+    cleanedNotes = cleanedNotes.replace(/\[WAITING_FOR_OWNER_ACTION\](\n|$)/g, '');
     
-    const updatedNotes = cleanedNotes + '\n[APPOINTMENT_OPTIONS]|' + JSON.stringify(appointmentOptions);
+    // פורמט הפגישות כמו שהשרת מצפה
+    const formattedOptions = appointmentOptions.map((opt, index) => ({
+      index: index + 1,
+      date: opt.date,
+      time: opt.time,
+      displayDate: opt.displayDate,
+      dayName: opt.dayName,
+      location: 'יתואם',
+      duration: opt.duration
+    }));
+    
+    const updatedNotes = cleanedNotes + '\n[APPOINTMENT_OPTIONS]|' + JSON.stringify(formattedOptions);
     
     await supabase
       .from('leads')
-      .update({ notes: updatedNotes })
+      .update({ 
+        notes: updatedNotes,
+        status: 'appointment_scheduling'
+      })
       .eq('id', leadId);
     
     res.json({ success: true });

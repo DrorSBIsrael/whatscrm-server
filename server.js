@@ -89,6 +89,30 @@ function normalizePhone(phone) {
 
 async function analyzeMessageWithClaude(message, conversationHistory = [], customerInfo = null) {
   try {
+    // 🔍 בדיקה: האם הלקוח במצב המתנה למידע?
+    const isWaitingForInfo = customerInfo?.notes && (
+      customerInfo.notes.includes('[WAITING_FOR_NAME]') ||
+      customerInfo.notes.includes('[WAITING_FOR_ADDRESS]') ||
+      customerInfo.notes.includes('[WAITING_FOR_CITY]') ||
+      customerInfo.notes.includes('[WAITING_FOR_MEDIA]')
+    );
+    
+    // אם הלקוח במצב המתנה - זו תמיד פנייה רלוונטית!
+    if (isWaitingForInfo) {
+      console.log('✅ לקוח במצב המתנה - מטפל בתשובה');
+      return {
+        is_business_inquiry: true, // ✅ תמיד TRUE כשמחכים לתשובה
+        intent: 'information_provided',
+        urgency: 'medium',
+        sentiment: 'neutral',
+        requires_media: false,
+        needs_address: false,
+        suggested_products: [],
+        summary: `הלקוח סיפק מידע: ${message}`,
+        suggested_response: 'תודה! קיבלתי את המידע.'
+      };
+    }
+    
     // 🚫 Claude מושבת זמנית - מחזיר ניתוח ידני
     return {
       is_business_inquiry: detectBusinessInquiry(message),

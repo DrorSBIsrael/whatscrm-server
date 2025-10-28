@@ -5219,6 +5219,63 @@ app.get('/reject-quote/:quoteId', async (req, res) => {
 });
 
 // ========================================
+// 📤 Update lead status when quote is sent
+// ========================================
+app.post('/api/quote-sent', async (req, res) => {
+  try {
+    const { quoteId } = req.body;
+    
+    if (!quoteId) {
+      return res.status(400).json({ error: 'Quote ID is required' });
+    }
+    
+    // Get quote with lead info
+    const { data: quote, error: quoteError } = await supabase
+      .from('quotes')
+      .select('*, leads(*)')
+      .eq('id', quoteId)
+      .single();
+    
+    if (quoteError || !quote) {
+      console.error('Error fetching quote:', quoteError);
+      return res.status(404).json({ error: 'Quote not found' });
+    }
+    
+    // Update quote status to sent
+    await supabase
+      .from('quotes')
+      .update({ status: 'sent' })
+      .eq('id', quoteId);
+    
+    // Update lead status to quoted and clean notes
+    if (quote.lead_id) {
+      const lead = quote.leads;
+      let cleanedNotes = (lead.notes || '')
+        .replace(/\[WAITING_FOR_OWNER_ACTION\]/g, '')
+        .replace(/\[SELECTING_APPOINTMENT_DAYS\]\|.+?(\n|$)/g, '')
+        .replace(/\[SELECTING_APPOINTMENT_TIMES_MULTI\]\|.+?(\n|$)/g, '')
+        .replace(/\[APPOINTMENT_OPTIONS\]\|.+?(\n|$)/g, '');
+      
+      // Add quote link to notes
+      cleanedNotes = cleanedNotes.trim() + `\n[QUOTE_SENT]:${quoteId}`;
+      
+      await supabase
+        .from('leads')
+        .update({ 
+          status: 'quoted',
+          notes: cleanedNotes
+        })
+        .eq('id', quote.lead_id);
+    }
+    
+    res.json({ success: true, message: 'Lead status updated successfully' });
+  } catch (error) {
+    console.error('Error updating lead status:', error);
+    res.status(500).json({ error: 'Failed to update lead status' });
+  }
+});
+
+// ========================================
 // 🗓️ תיאום פגישות
 // ========================================
 async function startAppointmentScheduling(business, lead, customer, ownerPhone) {

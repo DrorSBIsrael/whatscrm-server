@@ -576,6 +576,10 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
           console.log(`📋 Lead found, checking notes...`);
           console.log(`📋 Lead notes: ${lead.notes || 'NO NOTES'}`);
           
+          // בדוק אם הפגישות נשלחו מהאפליקציה
+          const isFromApp = customer.notes.includes('FROM_APP');
+          console.log(`📱 Is from app: ${isFromApp}`);
+          
           if (lead.notes && lead.notes.includes('[APPOINTMENT_OPTIONS]')) {
             const optionsMatch = lead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
             if (optionsMatch) {
@@ -714,6 +718,99 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
             }
           } else {
             console.log('❌ No options match found in notes');
+          }
+        } else if (isFromApp) {
+          // אם הפגישות נשלחו מהאפליקציה, נסה למצוא את האופציות בדרך אחרת
+          console.log('🔍 Trying to find appointment options from app...');
+          
+          // נסה להביא את ה-lead המעודכן
+          const { data: updatedLead } = await supabase
+            .from('leads')
+            .select('notes')
+            .eq('id', leadId)
+            .single();
+            
+          if (updatedLead && updatedLead.notes && updatedLead.notes.includes('[APPOINTMENT_OPTIONS]')) {
+            const optionsMatch = updatedLead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
+            if (optionsMatch) {
+              console.log(`🎯 Found options after refresh: ${optionsMatch[1]}`);
+              const options = JSON.parse(optionsMatch[1]);
+              
+              // עבד את הבחירה
+              if (choiceIndex >= 0 && choiceIndex < options.length) {
+                const selectedSlot = options[choiceIndex];
+                console.log(`✅ Selected slot from app:`, selectedSlot);
+                
+                // צור פגישה חדשה
+                const { data: appointment, error } = await supabase
+                  .from('appointments')
+                  .insert({
+                    lead_id: leadId,
+                    business_id: lead.business_id,
+                    customer_id: customer.id,
+                    appointment_date: selectedSlot.date,
+                    appointment_time: selectedSlot.time + ':00',
+                    duration: selectedSlot.duration,
+                    status: 'confirmed',
+                    location: customer.full_address || lead.customers.address,
+                    notes: `נקבעה על ידי הלקוח דרך האפליקציה`
+                  })
+                  .select()
+                  .single();
+                
+                if (!error && appointment) {
+                  const date = new Date(selectedSlot.date);
+                  const dayName = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'][date.getDay()];
+                  const dateStr = date.toLocaleDateString('he-IL');
+                  
+                  // אשר ללקוח
+                  await sendWhatsAppMessage(lead.businesses, customer.phone,
+                    `✅ *הפגישה נקבעה בהצלחה!*\n\n` +
+                    `📅 ${dayName}, ${dateStr}\n` +
+                    `⏰ ${selectedSlot.time}\n` +
+                    `📍 ${customer.full_address || lead.customers.address}\n\n` +
+                    `ניפגש בקרוב! 😊`
+                  );
+                  
+                  // עדכן את בעל העסק
+                  await sendWhatsAppMessage(lead.businesses, normalizePhone(lead.businesses.owner_phone),
+                    `✅ *פגישה נקבעה!*\n\n` +
+                    `👤 לקוח: ${customer.name}\n` +
+                    `📱 טלפון: ${customer.phone}\n` +
+                    `📅 ${dayName}, ${dateStr}\n` +
+                    `⏰ ${selectedSlot.time}\n` +
+                    `📍 ${customer.full_address || lead.customers.address}\n\n` +
+                    `💡 הלקוח אישר דרך האפליקציה`
+                  );
+                  
+                  // נקה את ה-notes
+                  await supabase
+                    .from('customers')
+                    .update({ notes: '' })
+                    .eq('id', customer.id);
+                  
+                  // עדכן את הפנייה
+                  await supabase
+                    .from('leads')
+                    .update({ 
+                      status: 'scheduled',
+                      notes: updatedLead.notes.replace(/\[APPOINTMENT_OPTIONS\]\|.+?(\n|$)/, '[APPOINTMENT_SCHEDULED]')
+                    })
+                    .eq('id', leadId);
+                } else {
+                  console.error('❌ Error creating appointment:', error);
+                  await sendWhatsAppMessage(lead.businesses, customer.phone,
+                    '❌ שגיאה בקביעת הפגישה. נסה שוב או צור קשר עם העסק.');
+                }
+              } else {
+                await sendWhatsAppMessage(lead.businesses, customer.phone,
+                  `❌ אופציה ${messageText} לא קיימת.\n\nאנא בחר מספר בין 1-${options.length}.`);
+              }
+            }
+          } else {
+            console.log('❌ Still no appointment options found even after refresh');
+            await sendWhatsAppMessage(lead.businesses, customer.phone,
+              '❌ לא נמצאו אופציות פגישה. אנא בקש מבעל העסק לשלוח שוב.');
           }
         } else {
           console.log('❌ Lead does not contain [APPOINTMENT_OPTIONS] in notes');
@@ -5431,7 +5528,3 @@ app.listen(PORT, () => {
   console.log(`🗑️ Auto Cleanup: Every 24 hours`);
   console.log(`🔧 Update: Fixed quote editing states - 16/10/2024`);
 });
-
-
-
-

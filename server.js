@@ -858,6 +858,32 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
           }
         } else {
           console.log('❌ Lead does not contain [APPOINTMENT_OPTIONS] in notes');
+          
+          // נסה לבדוק אם יש SELECTING_APPOINTMENT_DAYS
+          const selectingDaysMatch = lead.notes.match(/\[SELECTING_APPOINTMENT_DAYS\]\|(.+?)(\n|$)/);
+          
+          if (selectingDaysMatch) {
+            console.log('✅ Found SELECTING_APPOINTMENT_DAYS, handling day selection...');
+            try {
+              const daysOptions = JSON.parse(selectingDaysMatch[1]);
+              
+              if (choice >= 1 && choice <= daysOptions.length) {
+                const selectedDay = daysOptions[choice - 1];
+                console.log(`📅 לקוח בחר יום: ${selectedDay.dayName}, ${selectedDay.displayDate}`);
+                
+                // טפל בבחירת היום
+                await handleDaySelection(business, lead, selectedDay, customer.phone);
+                return;
+              } else {
+                console.log('❌ Invalid day choice');
+                await sendWhatsAppMessage(business, customer.phone,
+                  `❌ בחירה לא תקינה. בחר מספר בין 1 ל-${daysOptions.length}`);
+                return;
+              }
+            } catch (error) {
+              console.error('Error parsing day options:', error);
+            }
+          }
         }
       } else {
         console.log('❌ Lead not found with id:', leadId);
@@ -5257,15 +5283,22 @@ app.post('/api/quote-sent', async (req, res) => {
         .replace(/\[APPOINTMENT_OPTIONS\]\|.+?(\n|$)/g, '');
       
       // Add quote link to notes
-      cleanedNotes = cleanedNotes.trim() + `\n[QUOTE_SENT]:${quoteId}`;
+      const approvalUrl = `https://whatscrm-server.onrender.com/quote/${quoteId}`;
+      cleanedNotes = cleanedNotes.trim() + `\n[QUOTE_SENT]:${quoteId}\nלינק לאישור: ${approvalUrl}`;
       
-      await supabase
+      const { error: leadUpdateError } = await supabase
         .from('leads')
         .update({ 
           status: 'quoted',
           notes: cleanedNotes
         })
         .eq('id', quote.lead_id);
+        
+      if (leadUpdateError) {
+        console.error('Error updating lead status:', leadUpdateError);
+      } else {
+        console.log('✅ Lead status updated to quoted');
+      }
     }
     
     res.json({ success: true, message: 'Lead status updated successfully' });
@@ -5382,6 +5415,60 @@ async function startAppointmentScheduling(business, lead, customer, ownerPhone) 
     console.error('❌ שגיאה בתיאום פגישה:', error);
     await sendWhatsAppMessage(business, ownerPhone,
       '❌ שגיאה בתיאום הפגישה. נסה שוב.');
+  }
+}
+
+// ========================================
+// 📅 טיפול בבחירת יום
+// ========================================
+async function handleDaySelection(business, lead, selectedDay, customerPhone) {
+  try {
+    console.log(`📅 מטפל בבחירת יום: ${selectedDay.dayName}, ${selectedDay.displayDate}`);
+    
+    // חשב זמנים פנויים ליום שנבחר
+    const slots = await calculateDaySlots(business.id, selectedDay.date, selectedDay.availability);
+    
+    if (slots.length === 0) {
+      await sendWhatsAppMessage(business, customerPhone,
+        `❌ מצטער, אין זמנים פנויים ב${selectedDay.dayName} ${selectedDay.displayDate}.\n\nבחר יום אחר.`);
+      return;
+    }
+    
+    // שלח זמנים פנויים
+    let message = `בחרת: *${selectedDay.dayName} ${selectedDay.displayDate}*\n\n`;
+    message += `🕐 *מתי נוח לך?*\n\n`;
+    
+    const timesForThisDay = [];
+    slots.slice(0, 12).forEach((slot, index) => {
+      timesForThisDay.push({
+        index: index + 1,
+        date: selectedDay.date,
+        time: slot.time,
+        displayDate: selectedDay.displayDate,
+        dayName: selectedDay.dayName,
+        location: lead.customers.full_address || lead.customers.address || 'יתואם',
+        duration: 90
+      });
+      message += `${index + 1}️⃣ ${slot.time}\n`;
+    });
+    
+    message += '\nהשב עם המספר של השעה המועדפת';
+    
+    // עדכן את ה-notes עם הזמנים
+    let cleanedNotes = (lead.notes || '').replace(/\[SELECTING_APPOINTMENT_DAYS\]\|.+?(\n|$)/g, '');
+    await supabase
+      .from('leads')
+      .update({ 
+        notes: cleanedNotes + `\n[APPOINTMENT_OPTIONS]|${JSON.stringify(timesForThisDay)}`
+      })
+      .eq('id', lead.id);
+    
+    await sendWhatsAppMessage(business, customerPhone, message);
+    
+  } catch (error) {
+    console.error('❌ שגיאה בטיפול בבחירת יום:', error);
+    await sendWhatsAppMessage(business, customerPhone,
+      '❌ שגיאה בטעינת הזמנים הפנויים. נסה שוב או צור קשר עם העסק.');
   }
 }
 

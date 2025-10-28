@@ -513,15 +513,24 @@ app.post('/webhook/whatsapp', async (req, res) => {
               .replace(/\[SELECTING_APPOINTMENT_DAYS\]\|.+?(\n|$)/g, '')
               .replace(/\[WAITING_FOR_OWNER_ACTION\](\n|$)/g, '');
               
-            await supabase
+            const updatedNotes = cleanedNotes + '\n[APPOINTMENT_OPTIONS]|' + JSON.stringify(appointmentOptions);
+            console.log('📝 Updating lead notes:');
+            console.log('   Before:', currentNotes);
+            console.log('   After:', updatedNotes);
+            
+            const { error: updateError } = await supabase
               .from('leads')
               .update({ 
-                notes: cleanedNotes + '\n[APPOINTMENT_OPTIONS]|' + JSON.stringify(appointmentOptions),
+                notes: updatedNotes,
                 status: 'appointment_scheduling'
               })
               .eq('id', recentLead.id);
               
-            console.log('✅ האופציות נשמרו ב-lead');
+            if (updateError) {
+              console.error('❌ Error updating lead:', updateError);
+            } else {
+              console.log('✅ האופציות נשמרו ב-lead');
+            }
           }
         }
       }
@@ -624,10 +633,13 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
           const isFromApp = customer.notes.includes('FROM_APP');
           console.log(`📱 Is from app: ${isFromApp}`);
           
+          console.log(`🔍 Checking for APPOINTMENT_OPTIONS in lead notes...`);
+          console.log(`   Contains [APPOINTMENT_OPTIONS]: ${lead.notes && lead.notes.includes('[APPOINTMENT_OPTIONS]')}`);
+          
           if (lead.notes && lead.notes.includes('[APPOINTMENT_OPTIONS]')) {
             const optionsMatch = lead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
             if (optionsMatch) {
-              console.log(`🎯 Options match found: ${optionsMatch[1]}`);
+              console.log(`🎯 Options match found: ${optionsMatch[1].substring(0, 100)}...`);
               const options = JSON.parse(optionsMatch[1]);
               console.log(`📅 Available options: ${options.length}`);
               // בדוק שהאינדקס תקין
@@ -858,6 +870,8 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
           }
         } else {
           console.log('❌ Lead does not contain [APPOINTMENT_OPTIONS] in notes');
+          console.log('🔍 Checking lead notes again after NOT finding APPOINTMENT_OPTIONS...');
+          console.log(`📋 Full lead notes content: "${lead.notes}"`);
           
           // נסה לבדוק אם יש SELECTING_APPOINTMENT_DAYS
           const selectingDaysMatch = lead.notes.match(/\[SELECTING_APPOINTMENT_DAYS\]\|(.+?)(\n|$)/);

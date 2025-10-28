@@ -205,11 +205,11 @@ function detectBusinessInquiry(message) {
     lowerMessage.includes(keyword.toLowerCase())
   );
   
-  // אם ההודעה ארוכה יותר מ-20 תווים ויש בה מילות מפתח - ככל הנראה עסקית
-  if (message.length > 20 && hasBusinessKeywords) {
-    console.log('✅ זוהתה פנייה עסקית');
-    return true;
-  }
+// אם יש מילות מפתח עסקיות - זו פנייה עסקית (ללא מגבלת אורך)
+if (hasBusinessKeywords) {
+  console.log('✅ זוהתה פנייה עסקית');
+  return true;
+}
   
   // אם ההודעה קצרה מדי או אין מילות מפתח - לא עסקית
   console.log('⚠️ לא ברור אם פנייה עסקית - מסומן כלא עסקי');

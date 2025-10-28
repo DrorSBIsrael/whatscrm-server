@@ -866,9 +866,10 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
             console.log('✅ Found SELECTING_APPOINTMENT_DAYS, handling day selection...');
             try {
               const daysOptions = JSON.parse(selectingDaysMatch[1]);
+              const dayChoice = parseInt(messageText.trim());
               
-              if (choice >= 1 && choice <= daysOptions.length) {
-                const selectedDay = daysOptions[choice - 1];
+              if (dayChoice >= 1 && dayChoice <= daysOptions.length) {
+                const selectedDay = daysOptions[dayChoice - 1];
                 console.log(`📅 לקוח בחר יום: ${selectedDay.dayName}, ${selectedDay.displayDate}`);
                 
                 // טפל בבחירת היום

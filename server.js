@@ -479,6 +479,50 @@ app.post('/webhook/whatsapp', async (req, res) => {
             .eq('id', targetCustomer.id);
             
           console.log('✅ עודכן סטטוס הלקוח להמתנה לבחירת פגישה');
+          
+          // נסה לחלץ את האופציות מההודעה עצמה
+          const appointmentOptions = [];
+          const optionRegex = /(\d)️⃣\s*יום\s*(.+?),\s*(\d+)\s*ב(.+?)\n\s*⏰\s*(\d{2}:\d{2})/g;
+          let match;
+          
+          while ((match = optionRegex.exec(messageText)) !== null) {
+            const [, index, dayName, dayNum, monthName, time] = match;
+            const year = new Date().getFullYear();
+            const month = monthName.includes('אוקטובר') ? '10' : 
+                        monthName.includes('נובמבר') ? '11' : 
+                        monthName.includes('דצמבר') ? '12' : '01';
+            const date = `${year}-${month.padStart(2, '0')}-${dayNum.padStart(2, '0')}`;
+            
+            appointmentOptions.push({
+              index: parseInt(index),
+              date,
+              time,
+              displayDate: `${dayNum}.${month}.${year}`,
+              dayName,
+              location: 'יתואם',
+              duration: 90
+            });
+          }
+          
+          if (appointmentOptions.length > 0) {
+            console.log(`📅 נמצאו ${appointmentOptions.length} אופציות פגישה בהודעה`);
+            
+            // עדכן את ה-lead עם האופציות
+            const currentNotes = recentLead.notes || '';
+            const cleanedNotes = currentNotes
+              .replace(/\[SELECTING_APPOINTMENT_DAYS\]\|.+?(\n|$)/g, '')
+              .replace(/\[WAITING_FOR_OWNER_ACTION\](\n|$)/g, '');
+              
+            await supabase
+              .from('leads')
+              .update({ 
+                notes: cleanedNotes + '\n[APPOINTMENT_OPTIONS]|' + JSON.stringify(appointmentOptions),
+                status: 'appointment_scheduling'
+              })
+              .eq('id', recentLead.id);
+              
+            console.log('✅ האופציות נשמרו ב-lead');
+          }
         }
       }
     }

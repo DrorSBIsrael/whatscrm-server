@@ -521,8 +521,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
             const { error: updateError } = await supabase
               .from('leads')
               .update({ 
-                notes: updatedNotes,
-                status: 'appointment_scheduling'
+                notes: updatedNotes
+                // לא משנים סטטוס - נשאר כמו שהיה
               })
               .eq('id', recentLead.id);
               
@@ -636,12 +636,17 @@ async function handleIncomingMessage(business, phoneNumber, messageText, mediaUr
           console.log(`🔍 Checking for APPOINTMENT_OPTIONS in lead notes...`);
           console.log(`   Contains [APPOINTMENT_OPTIONS]: ${lead.notes && lead.notes.includes('[APPOINTMENT_OPTIONS]')}`);
           
-          if (lead.notes && lead.notes.includes('[APPOINTMENT_OPTIONS]')) {
+          // בודק אם יש APPOINTMENT_OPTIONS
+          const hasAppointmentOptions = lead.notes && lead.notes.includes('[APPOINTMENT_OPTIONS]');
+          console.log(`🔍 Checking for APPOINTMENT_OPTIONS: ${hasAppointmentOptions}`);
+          
+          if (hasAppointmentOptions) {
             const optionsMatch = lead.notes.match(/\[APPOINTMENT_OPTIONS\]\|(.+?)(\n|$)/);
             if (optionsMatch) {
               console.log(`🎯 Options match found: ${optionsMatch[1].substring(0, 100)}...`);
               const options = JSON.parse(optionsMatch[1]);
               console.log(`📅 Available options: ${options.length}`);
+              console.log('📋 Option details:', options.map(o => `${o.index}: ${o.dayName} ${o.displayDate} ${o.time}`));
               // בדוק שהאינדקס תקין
               if (choiceIndex >= 0 && choiceIndex < options.length) {
                 const selectedSlot = options[choiceIndex];
@@ -5018,40 +5023,43 @@ app.post('/api/mark-appointment-sent', async (req, res) => {
       })
       .eq('id', customerId);
     
-    // עדכן את ה-notes של הפנייה עם האופציות
-    const { data: lead } = await supabase
-      .from('leads')
-      .select('notes')
-      .eq('id', leadId)
-      .single();
-    
-    // נקה סטטוסים ישנים ממערכת אחרת
-    let cleanedNotes = (lead?.notes || '').replace(/\[SELECTING_APPOINTMENT_DAYS\]\|.+?(\n|$)/g, '');
-    cleanedNotes = cleanedNotes.replace(/\[SELECTING_APPOINTMENT_TIMES_MULTI\]\|.+?(\n|$)/g, '');
-    cleanedNotes = cleanedNotes.replace(/\[WAITING_FOR_OWNER_ACTION\](\n|$)/g, '');
-    
-    // פורמט הפגישות כמו שהשרת מצפה
-    const formattedOptions = appointmentOptions.map((opt, index) => ({
-      index: index + 1,
-      date: opt.date,
-      time: opt.time,
-      displayDate: opt.displayDate,
-      dayName: opt.dayName,
-      location: 'יתואם',
-      duration: opt.duration
-    }));
-    
-    const updatedNotes = cleanedNotes + '\n[APPOINTMENT_OPTIONS]|' + JSON.stringify(formattedOptions);
-    
-    console.log('📝 Updating lead notes with:', updatedNotes);
-    
-    const { error: updateError } = await supabase
-      .from('leads')
-      .update({ 
-        notes: updatedNotes,
-        status: 'appointment_scheduling'
-      })
-      .eq('id', leadId);
+      // עדכן את ה-notes של הפנייה עם האופציות
+      const { data: lead } = await supabase
+        .from('leads')
+        .select('notes')
+        .eq('id', leadId)
+        .single();
+      
+      // נקה סטטוסים ישנים ממערכת אחרת
+      let cleanedNotes = (lead?.notes || '').replace(/\[SELECTING_APPOINTMENT_DAYS\]\|.+?(\n|$)/g, '');
+      cleanedNotes = cleanedNotes.replace(/\[SELECTING_APPOINTMENT_TIMES_MULTI\]\|.+?(\n|$)/g, '');
+      cleanedNotes = cleanedNotes.replace(/\[WAITING_FOR_OWNER_ACTION\](\n|$)/g, '');
+      cleanedNotes = cleanedNotes.replace(/\[APPOINTMENT_OPTIONS\]\|.+?(\n|$)/g, ''); // נקה גם אופציות קודמות
+      
+      // פורמט הפגישות כמו שהשרת מצפה
+      const formattedOptions = appointmentOptions.map((opt, index) => ({
+        index: index + 1,
+        date: opt.date,
+        time: opt.time,
+        displayDate: opt.displayDate,
+        dayName: opt.dayName,
+        location: 'יתואם',
+        duration: opt.duration
+      }));
+      
+      const updatedNotes = cleanedNotes.trim() + '\n[APPOINTMENT_OPTIONS]|' + JSON.stringify(formattedOptions);
+      
+      console.log('📝 Updating lead notes from app with appointment options');
+      console.log('   Cleaned notes:', cleanedNotes);
+      console.log('   New options:', formattedOptions);
+      
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({ 
+          notes: updatedNotes
+          // לא משנים סטטוס - נשאר כמו שהיה
+        })
+        .eq('id', leadId);
     
     if (updateError) {
       console.error('❌ Error updating lead:', updateError);

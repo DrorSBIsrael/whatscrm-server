@@ -87,7 +87,6 @@ function normalizePhone(phone) {
   return cleaned;
 }
 
-
 async function analyzeMessageWithClaude(message, conversationHistory = [], customerInfo = null) {
   try {
     // בנה context של הלקוח אם יש
@@ -141,14 +140,14 @@ ${customerContext}
 3. אם יש שם וכתובת - suggested_response צריך להודות על הפרטים ולהתמקד בבעיה
 4. התשובה חייבת להיות JSON תקין בלבד`;
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
-      messages: [{
-        role: 'user',
-        content: prompt
-      }]
-    });
+  //  const response = await anthropic.messages.create({
+  //    model: 'claude-sonnet-4-20250514',
+  //    max_tokens: 1000,
+  //     messages: [{
+  //       role: 'user',
+  //       content: prompt
+  //     }]
+  //   });
 
     const analysisText = response.content[0].text.trim();
     const cleanedText = analysisText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();

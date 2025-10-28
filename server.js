@@ -2239,12 +2239,6 @@ const analysis = await analyzeMessageWithClaude(
     city: customer.city
   }
 );
-
-// אם זו לא פנייה עסקית - אל תגיב בכלל
-if (!analysis.is_business_inquiry) {
-  console.log('💬 שיחה פרטית - הבוט לא מגיב');
-  return; // צא בלי לשלוח כלום
-}
   
 // ========================================
 // 🆕 זיהוי חכם של פרטי לקוח
